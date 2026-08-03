@@ -1,0 +1,18 @@
+# big artifacts
+weights/
+.venv/
+# build outputs
+bin/
+tests/*/bin/
+tests/*/golden/
+tests/*/fixtures/
+tests/m4b/fixtures/
+docs/locality/locality_dump.ndjson
+*.o
+.DS_Store
+tests/m6b/tmp/
+tests/m6a/tmp/
+tests/*/results/
+tests/*/results_oracle/
+__pycache__/
+*.pyc

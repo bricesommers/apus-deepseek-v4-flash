@@ -1,0 +1,34 @@
+apus — third-party notices
+==========================
+
+apus incorporates design and code from the following third-party projects.
+Each remains the property of its own copyright holders and is used under
+its own license.
+
+colibri
+-------
+
+apus's tiered expert-store design (NVMe slab store, bounded RAM cache with
+LFRU eviction and hysteresis pins, RSS guard, usage persistence) and the
+router-lookahead prefetch "pilot" follow the design of, and adapt code
+from, colibri:
+
+    https://github.com/JustVugg/colibri
+
+colibri is licensed under the Apache License, Version 2.0. The full
+license text is reproduced in LICENSE.apache-2.0 in this repository.
+Adapted files carry per-file attribution headers — see c/cache.h,
+c/compat.h, c/pilot.h, and c/apus.c.
+
+DeepSeek-AI
+-----------
+
+The DeepSeek-V4-Flash / DeepSeek-V4-Flash-0731 model weights, tokenizer,
+and chat-encoding format are made available by DeepSeek-AI under the MIT
+License. They are NOT part of this repository: tools/download.py fetches
+them from Hugging Face (deepseek-ai/DeepSeek-V4-Flash-0731). apus's
+tokenizer and message encoding were validated byte-exactly against
+DeepSeek-AI's MIT-licensed reference implementations.
+
+apus is an independent project and is not affiliated with, endorsed by, or
+sponsored by DeepSeek-AI or the colibri project.
