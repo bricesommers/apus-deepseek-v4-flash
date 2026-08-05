@@ -54,47 +54,110 @@ first, throughput second.
   download/convert)
 - Python 3.11+ for the tools (download/convert, chat, server)
 
-## Quickstart
+## Quickstart (step by step, no experience needed)
+
+You need: a Mac with Apple Silicon (M1 or later) **or** a Linux PC — and
+about **180 GB of free disk space** for the model. Windows users: install
+WSL2 first (`wsl --install` in PowerShell), then follow the Linux steps
+inside it.
+
+Every grey box below is a command to paste into your terminal (on Mac:
+open **Terminal** from Applications → Utilities). Paste one box at a time,
+press Enter, wait for it to finish.
+
+### Step 1 — get the code onto your computer
+
+Either clone it (if you have git):
 
 ```sh
-# 0. Linux/WSL2 only: sudo apt install build-essential python3-venv
+git clone https://github.com/bricesommers/apus.git
+cd apus
+```
 
-# 1. Python environment for the tools (download, chat, server)
+Or without git: click the green **Code** button on the GitHub page →
+**Download ZIP** → double-click the downloaded zip → open a terminal
+inside the unzipped folder (on Mac: right-click the folder → Services →
+New Terminal at Folder). Then:
+
+```sh
+cd apus-main    # only if you used the ZIP (folder name may vary)
+```
+
+From now on, run everything from inside this folder.
+
+### Step 2 — install the tools
+
+On **Mac** (installs the compiler if asked — say yes):
+
+```sh
+xcode-select --install 2>/dev/null; python3 -m venv .venv
+.venv/bin/pip install numpy tokenizers huggingface_hub safetensors
+```
+
+On **Linux / WSL2**:
+
+```sh
+sudo apt update && sudo apt install -y build-essential python3-venv python3-pip
 python3 -m venv .venv
 .venv/bin/pip install numpy tokenizers huggingface_hub safetensors
+```
 
-# 2. Download + convert the weights (~160 GB; resumable, one shard at a
-#    time, so peak extra disk is one ~3.5 GB source shard; tokenizer and
-#    generation config are fetched into the container automatically)
+This creates a small private Python environment called `.venv` inside the
+folder — nothing is installed system-wide, and deleting the folder removes
+everything.
+
+### Step 3 — download the model (the long part: ~160 GB)
+
+```sh
 .venv/bin/python tools/download.py \
     --repo deepseek-ai/DeepSeek-V4-Flash-0731 \
     --work weights/work --out weights/apus-0731
+```
 
-# 3. Build the engine (CPU NEON path; add metal=1 for the GPU backend)
-make apus            # or: make metal=1 apus
+This downloads the model from DeepSeek's Hugging Face repo and repacks it
+for streaming. Expect **1–6 hours depending on your internet**. It is safe
+to interrupt (Ctrl-C, closing the lid, losing wifi): run the same command
+again and it resumes exactly where it stopped. When it prints
+`download+convert complete`, the model is in `weights/apus-0731/` — you do
+not need to copy or move anything; the tools put every file where it
+belongs.
 
-# 4. Chat
+### Step 4 — build the engine
+
+```sh
+make apus
+```
+
+Takes under a minute. You now have the engine at `bin/apus`.
+
+### Step 5 — talk to it
+
+```sh
 .venv/bin/python tools/chat.py --model weights/apus-0731 --tiered
 ```
 
-One-shot generation:
+Wait ~10 seconds for it to load, then type a question at the `you>`
+prompt. Answers appear slowly (about 1 token/second — this is normal for
+a 284B model on a laptop). Type `/help` for commands, `/quit` to exit.
+
+Prefer a one-off question instead of a chat?
 
 ```sh
 ./bin/apus run --model weights/apus-0731 --tiered \
-    --prompt "Your prompt here" --max-tokens 100 --temp 0
+    --prompt "The capital of France is" --max-tokens 100 --temp 0
 ```
 
-OpenAI-compatible server (point any OpenAI client at
-`http://localhost:8080/v1`):
+Want an app-like UI (LM Studio, Open WebUI, your own scripts)? Run the
+server and point any OpenAI-compatible client at
+`http://localhost:8080/v1`:
 
 ```sh
 .venv/bin/python tools/server.py --model weights/apus-0731 --tiered --port 8080
 ```
 
-`--tiered` enables the expert store (required on 32 GB). See `docs/USAGE.md`
-for in-chat commands, knobs (`APUS_EXPERT_CACHE_MB`, `APUS_THREADS`,
-`APUS_PILOT_K`, `APUS_METAL`), LM Studio setup, troubleshooting, and what
-performance to expect.
+More options (speed knobs, troubleshooting, LM Studio detail):
+`docs/USAGE.md`.
+
 
 ## How it works
 
