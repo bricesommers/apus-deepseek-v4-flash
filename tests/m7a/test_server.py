@@ -323,12 +323,17 @@ class GatewayCase(unittest.TestCase):
         env = dict(os.environ)
         env.pop("APUS_API_KEY", None)
         env.update(dict(cls.EXTRA_ENV))
+        # Capture gateway stderr so a CI startup failure is diagnosable
+        # (was DEVNULL: the failure mode is invisible otherwise).
+        import tempfile
+        cls._errlog = tempfile.NamedTemporaryFile(
+            mode="rb", prefix="apus-gw-", suffix=".log", delete=False)
         cls.proc = subprocess.Popen(
             [sys.executable, SERVER, "--model", cls.MODEL_DIR,
              "--apus", APUS, "--port", str(cls.port),
              "--model-id", cls.MODEL_ID, *cls.EXTRA_ARGS],
-            cwd=ROOT, env=env, stderr=subprocess.DEVNULL)
-        deadline = 30
+            cwd=ROOT, env=env, stderr=cls._errlog)
+        deadline = 120  # shared CI runners can be very slow to boot Metal
         import time
         t0 = time.time()
         while time.time() - t0 < deadline:
@@ -340,7 +345,12 @@ class GatewayCase(unittest.TestCase):
                 pass
             time.sleep(0.2)
         cls.proc.kill()
-        raise AssertionError("gateway did not come up")
+        cls._errlog.close()
+        with open(cls._errlog.name, "rb") as f:
+            tail = f.read()[-2000:].decode("utf-8", "replace")
+        raise AssertionError(
+            f"gateway did not come up within {deadline}s\n"
+            f"--- gateway stderr tail ---\n{tail}")
 
     @classmethod
     def tearDownClass(cls):
