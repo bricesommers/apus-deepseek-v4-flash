@@ -175,7 +175,7 @@ yet — the engine uses pthreads and POSIX file I/O throughout.
 ## License and notices
 
 apus is **source-available, not open-source**, under the
-**PolyForm Noncommercial License 1.0.0** (see `LICENSE`): you may use,
+**PolyForm Noncommercial License 1.0.0** (see `LICENCE.PolyForm-Noncommercial`): you may use,
 copy, modify, and distribute the apus source code for **noncommercial
 purposes only**; any commercial use requires a separate license from the
 authors.
