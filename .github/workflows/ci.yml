@@ -80,8 +80,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Homebrew Python on macos-latest is PEP-668 externally-managed:
+      # system pip is refused, so use a venv for the whole job.
       - name: Install Python deps
-        run: pip3 install "numpy>=1.26" "safetensors>=0.4" "tokenizers>=0.19"
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install "numpy>=1.26" "safetensors>=0.4" "tokenizers>=0.19"
 
       - name: Build the engine
         run: make -s apus
@@ -91,14 +95,14 @@ jobs:
           set -e
           for t in $BATTERY; do
             echo "=== $t ==="
-            make -s PY=python3 "$t"
+            make -s PY=.venv/bin/python "$t"
           done
 
       - name: Python suites (m1 converter, r1b comparators)
         run: |
-          python3 -m unittest discover -s tests/m1
-          python3 tests/r1b/test_compare.py
-          python3 tests/r1b/test_compare_api.py
+          .venv/bin/python -m unittest discover -s tests/m1
+          .venv/bin/python tests/r1b/test_compare.py
+          .venv/bin/python tests/r1b/test_compare_api.py
 
       - name: Metal GPU suite (macOS-only)
-        run: make -s PY=python3 metal=1 test-m7b
+        run: make -s PY=.venv/bin/python metal=1 test-m7b
