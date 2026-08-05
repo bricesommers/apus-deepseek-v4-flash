@@ -9,12 +9,16 @@ else
 CC      := gcc
 endif
 CFLAGS  ?= -std=c11 -O2 -Wall -Wextra
+# Pin FP mul+add contraction OFF on every platform: scalar kernels and the
+# in-test scalar references have documented two-rounding sequences, but
+# newer clangs (GitHub macos-latest) auto-contract loops to FMA where our
+# dev clang 17 did not — same flags, different bits (test-m6c f32 bitwise
+# gate). No-op where the compiler was not contracting anyway.
+CFLAGS  += -ffp-contract=off
 ifneq ($(UNAME),Darwin)
 # Linux (M12a-1): under -std=c11 glibc hides pread/posix_memalign/strdup/
 # clock_gettime/posix_fadvise behind feature-test macros; _GNU_SOURCE
-# exposes them. -ffp-contract=off pins FP mul+add contraction off so the
-# scalar kernels' documented rounding sequences survive -O2 on any future
-# -march (x86-64 baseline has no FMA, so it is a no-op today).
+# exposes them.
 # -fno-tree-vectorize -fno-tree-slp-vectorize: works around a Rosetta
 # linux/amd64-emulation mistranslation of gcc -O2 auto-vectorized SSE2
 # code (test-m8 SIGTRAPs with "rosetta error: could not find free space
@@ -23,7 +27,7 @@ ifneq ($(UNAME),Darwin)
 # -ffast-math and elementwise loops are per-element identical either way,
 # so the scalar kernels produce the same bits with or without these flags.
 # M12a-2 (AVX2) hand-writes the vector kernels and can revisit this.
-CFLAGS  += -D_GNU_SOURCE -ffp-contract=off -fno-tree-vectorize -fno-tree-slp-vectorize
+CFLAGS  += -D_GNU_SOURCE -fno-tree-vectorize -fno-tree-slp-vectorize
 endif
 LDLIBS  := -lm
 # M9b: Accelerate.framework (system vecLib/AMX BLAS) for the batch-M prefill
