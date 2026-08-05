@@ -96,8 +96,9 @@ class Driver:
     # -- shard list ----------------------------------------------------------
 
     # Small support files the engine needs next to the converted container:
-    # tokenizer + generation config (weights are useless without them).
-    SUPPORT_FILES = ("tokenizer.json", "tokenizer_config.json",
+    # config + tokenizer + generation config (weights are useless without
+    # them). config.json is also fetched above for conversion, into work.
+    SUPPORT_FILES = ("config.json", "tokenizer.json", "tokenizer_config.json",
                      "generation_config.json")
 
     def shard_names(self):

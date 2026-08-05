@@ -662,6 +662,7 @@ static int run_main(int argc, char **argv) {
     const char *model_dir = NULL, *prompt = NULL, *ids_str = NULL;
     const char *measure_path = NULL;
     int max_tokens = 32, quiet = 0;
+    int dump_margins = apus_env_int("APUS_DUMP_MARGINS", 0);
     int tiered = apus_env_int("APUS_TIERED", 0);
     int metal = apus_env_int("APUS_METAL", 0);
     int spec = apus_env_int("APUS_SPEC", 0);
@@ -683,6 +684,7 @@ static int run_main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--spec-k") && i + 1 < argc) spec_k = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--measure-locality") && i + 1 < argc) measure_path = argv[++i];
         else if (!strcmp(argv[i], "--quiet")) quiet = 1;
+        else if (!strcmp(argv[i], "--dump-margins")) dump_margins = 1;
         else { usage(stderr); return 2; }
     }
     if (!model_dir || (!prompt && !ids_str)) { usage(stderr); return 2; }
@@ -897,6 +899,19 @@ static int run_main(int argc, char **argv) {
     /* decode loop */
     double t_gen0 = now_s();
     for (int step = 0; step < max_tokens; step++) {
+        if (dump_margins) {
+            /* top1/top2 gap per step: near-tie adjudication for
+             * cross-platform divergence (x86 vs ARM reorder class). */
+            int i1 = 0, i2 = -1;
+            float v1 = logits[0], v2 = -__builtin_inff();
+            for (int j = 1; j < V; j++) {
+                float v = logits[j];
+                if (v > v1) { v2 = v1; i2 = i1; v1 = v; i1 = j; }
+                else if (i2 < 0 || v > v2) { v2 = v; i2 = j; }
+            }
+            fprintf(stderr, "margin step=%d top1=%d top2=%d gap=%.6g\n",
+                    step, i1, i2, v1 - v2);
+        }
         int tok_id = apus_sample(logits, (size_t)V, temp, top_p, &rng, scratch);
         if (quiet) {
             printf("%d\n", tok_id);

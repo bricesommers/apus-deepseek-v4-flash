@@ -55,7 +55,10 @@ class TestDownloadDriver(unittest.TestCase):
         cls.tmp.cleanup()
 
     def _compare_to_ref(self, out):
-        skip = {apus_convert.STATE_FILE}
+        # The driver (not the one-shot Converter) also copies small support
+        # files (config.json, tokenizer*, generation_config) into out/ —
+        # intended since M12c: the container dir must be self-contained.
+        skip = {apus_convert.STATE_FILE, *apus_download.Driver.SUPPORT_FILES}
         ref_files = sorted(f for f in os.listdir(self.ref)
                            if not f.startswith(".") and f not in skip)
         out_files = sorted(f for f in os.listdir(out)
@@ -65,6 +68,13 @@ class TestDownloadDriver(unittest.TestCase):
             self.assertTrue(
                 filecmp.cmp(os.path.join(self.ref, f), os.path.join(out, f),
                             shallow=False), f"{f} differs")
+        # support files present in the fixture remote must land in out/
+        for f in apus_download.Driver.SUPPORT_FILES:
+            src = os.path.join(self.remote, f)
+            if os.path.exists(src):
+                self.assertTrue(
+                    filecmp.cmp(src, os.path.join(out, f), shallow=False),
+                    f"support file {f} missing/different in out/")
 
     def test_clean_run(self):
         work = os.path.join(self.tmp.name, "work1")
