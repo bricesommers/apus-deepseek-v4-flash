@@ -43,9 +43,11 @@ first, throughput second.
 
 ## Requirements
 
-- Apple Silicon Mac (M1 or later), macOS with Xcode command line tools —
-  or Linux/x86_64 with gcc and make (engine + test battery; the tiered
-  expert store is tuned for Apple Silicon unified memory)
+- **macOS/Apple Silicon** (M1 or later) with Xcode command line tools, or
+  **Linux/x86_64** with gcc and make (AVX2 auto-detected; scalar fallback
+  otherwise). **Windows: not natively** (the engine uses POSIX threads and
+  file I/O) — use WSL2 and follow the Linux path; untested there, reports
+  welcome.
 - **≥ 16 GB unified memory** (32 GB recommended; the tiered store trades
   speed for memory headroom)
 - **~180 GB free disk** (weights container + one source shard during
@@ -55,6 +57,8 @@ first, throughput second.
 ## Quickstart
 
 ```sh
+# 0. Linux/WSL2 only: sudo apt install build-essential python3-venv
+
 # 1. Python environment for the tools (download, chat, server)
 python3 -m venv .venv
 .venv/bin/pip install numpy tokenizers huggingface_hub safetensors
@@ -89,8 +93,8 @@ OpenAI-compatible server (point any OpenAI client at
 
 `--tiered` enables the expert store (required on 32 GB). See `docs/USAGE.md`
 for in-chat commands, knobs (`APUS_EXPERT_CACHE_MB`, `APUS_THREADS`,
-`APUS_PILOT_K`, `APUS_METAL`), and what performance to expect, and
-`docs/HOWTO.md` for a longer walkthrough.
+`APUS_PILOT_K`, `APUS_METAL`), LM Studio setup, troubleshooting, and what
+performance to expect.
 
 ## How it works
 
