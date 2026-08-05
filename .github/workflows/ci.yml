@@ -1,0 +1,104 @@
+# .github/workflows/ci.yml — apus CI: full portable test battery.
+#
+# Triggers: every push to `main` (the public snapshot branch is pushed AS
+# main — see docs/RELEASE.md) plus manual workflow_dispatch.
+#
+# Jobs:
+#   linux  — ubuntu-latest (x86_64, gcc): engine build + the full portable
+#            battery. This is the same target list tools/docker/test-linux.sh
+#            proved green in M12a-1, run here on native x86_64 instead of
+#            under Rosetta/QEMU emulation (minutes, not ~10 min).
+#   macos  — macos-latest (Apple Silicon, clang/NEON): same battery, plus
+#            the Metal GPU suite (test-m7b), which is macOS-only BY DESIGN
+#            (the Makefile guards the Metal targets with `ifeq (Darwin)`).
+#
+# There is deliberately NO Windows job: the engine does not build on
+# Windows yet — it relies on pthreads (c/pool.h) and POSIX file I/O
+# (pread, posix_fadvise, posix_memalign; c/compat.h shims cover macOS and
+# Linux only). A Windows port needs a thread-pool + file-I/O shim layer
+# first. See tests/m12/README.md (M12b section).
+#
+# PY=python3 everywhere: the Makefile defaults to the local dev venv
+# (.venv/bin/python), which does not exist on a fresh runner.
+#
+# Fixture/golden dirs (tests/*/fixtures, tests/*/golden, etc.) are NOT in
+# the repo — the make targets regenerate them deterministically via the
+# golden-* dependencies, exactly like tools/docker/test-linux.sh does.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  # The M12a-1-proven portable battery (tools/docker/test-linux.sh default
+  # list). test-m7b is macOS-only and runs in the macos job instead.
+  BATTERY: >-
+    test-m2 test-m3 test-m4a test-m4c test-m5 test-m6a test-m6b test-m6c
+    test-m7a test-m8 test-m9a test-m9b test-m9c test-m9d test-m9e
+    test-m11b check-m11a test-m12a2
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain and Python deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc make python3 python3-pip
+          # ubuntu 24.04 marks the system Python externally-managed; a
+          # throwaway CI runner is exactly the --break-system-packages case
+          # (same policy as tools/docker/Dockerfile.dev).
+          pip3 install --break-system-packages \
+            "numpy>=1.26" "safetensors>=0.4" "tokenizers>=0.19"
+
+      - name: Build the engine
+        run: make -s apus
+
+      - name: Portable battery (make targets)
+        run: |
+          set -e
+          for t in $BATTERY; do
+            echo "=== $t ==="
+            make -s PY=python3 "$t"
+          done
+
+      - name: Python suites (m1 converter, r1b comparators)
+        run: |
+          python3 -m unittest discover -s tests/m1
+          python3 tests/r1b/test_compare.py
+          python3 tests/r1b/test_compare_api.py
+
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python deps
+        run: pip3 install "numpy>=1.26" "safetensors>=0.4" "tokenizers>=0.19"
+
+      - name: Build the engine
+        run: make -s apus
+
+      - name: Portable battery (make targets)
+        run: |
+          set -e
+          for t in $BATTERY; do
+            echo "=== $t ==="
+            make -s PY=python3 "$t"
+          done
+
+      - name: Python suites (m1 converter, r1b comparators)
+        run: |
+          python3 -m unittest discover -s tests/m1
+          python3 tests/r1b/test_compare.py
+          python3 tests/r1b/test_compare_api.py
+
+      - name: Metal GPU suite (macOS-only)
+        run: make -s PY=python3 metal=1 test-m7b

@@ -127,6 +127,32 @@ def _B(x, f64):
     return x if f64 else bf16_round(x)
 
 
+def _mm(a, b):
+    """Cross-platform DETERMINISTIC matmul (M12b).
+
+    numpy's `@`/einsum use BLAS (Accelerate/OpenBLAS) or SIMD reduction
+    loops whose summation order varies by platform; the resulting ~1-ulp
+    differences flip bf16 rounding ties and top-k selections, and those
+    flips cascade through the random-weight fixtures (fixtures generated
+    on Linux/x86 failed the m4c/m5 gates: 6+1 checks). Here the reduction
+    runs in the INPUT dtype with a FIXED sequential k-order using only
+    broadcast elementwise ops — per output element each step is a single
+    IEEE-exact fp32/fp64 multiply or add, identical on every platform —
+    so fixtures regenerate bitwise-identically on macOS and Linux.
+    Accumulating in fp32 (f32-faithful mode) keeps the oracle in the same
+    precision class as the C kernels: the tolerance budget then covers
+    only summation-ORDER differences (sequential oracle vs the kernels'
+    own orders), exactly as it did for the fp32 BLAS oracle.
+    """
+    dt = np.result_type(a, b)
+    a_dt = np.asarray(a, dtype=dt)
+    b_dt = np.asarray(b, dtype=dt)
+    acc = np.zeros(a_dt.shape[:-1] + b_dt.shape[1:], dtype=dt)
+    for k in range(a_dt.shape[-1]):
+        acc += a_dt[..., k:k + 1] * b_dt[k]
+    return acc
+
+
 # ---------------------------------------------------------------------------
 # Quant simulations (QAT) — algorithmic, applied in BOTH modes.
 # Ports of kernel.py act_quant (40-125) / fp4_quant_kernel (128-200).
@@ -229,7 +255,7 @@ def hadamard_rotate(x, f64):
     pre-quant. See tests/m4b/README.md ambiguities."""
     n = x.shape[-1]
     H = hadamard_matrix(n).astype(_dt(f64))
-    return _B(x.astype(_dt(f64)) @ H * (n ** -0.5), f64)
+    return _B(_mm(x.astype(_dt(f64)), H) * (n ** -0.5), f64)
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +282,7 @@ def fp8_linear(x, w_codes, w_scales, f64):
     O = w.shape[0]
     out = np.zeros((a.shape[0], O), dtype=dt)
     for kb in range(K // 128):
-        dot = a[:, kb * 128:(kb + 1) * 128] @ w[:, kb * 128:(kb + 1) * 128].T
+        dot = _mm(a[:, kb * 128:(kb + 1) * 128], w[:, kb * 128:(kb + 1) * 128].T)
         out += dot * sa[:, kb].astype(dt)[:, None]
     return _B(out, f64).reshape(*shp[:-1], O)
 
@@ -278,7 +304,7 @@ def fp4_linear(x, w_packed, w_scales, f64):
     sb = np.exp2(w_scales.astype(np.int64) - 127).astype(dt)   # [O, K/32]
     out = np.zeros((xf.shape[0], w_packed.shape[0]), dtype=dt)
     for kb in range(K // 32):
-        dot = a[:, kb * 32:(kb + 1) * 32] @ wl[:, kb * 32:(kb + 1) * 32].T
+        dot = _mm(a[:, kb * 32:(kb + 1) * 32], wl[:, kb * 32:(kb + 1) * 32].T)
         out += (dot * sa[:, (kb * 32) // 128].astype(dt)[:, None]) * sb[:, kb][None, :]
     return _B(out, f64).reshape(*shp[:-1], wl.shape[0])
 
@@ -286,14 +312,14 @@ def fp4_linear(x, w_packed, w_scales, f64):
 def bf16_linear(x, w, f64):
     """Plain bf16 matmul: fp32-accumulate, bf16 out (torch semantics)."""
     dt = _dt(f64)
-    y = _B(x, f64).astype(dt) @ w.astype(dt).T
+    y = _mm(_B(x, f64).astype(dt), w.astype(dt).T)
     return _B(y, f64)
 
 
 def f32_linear(x, w, f64):
     """fp32 matmul, no output rounding (compressor wkv/wgate, gate)."""
     dt = _dt(f64)
-    return x.astype(dt) @ w.astype(dt).T
+    return _mm(x.astype(dt), w.astype(dt).T)
 
 
 # ---------------------------------------------------------------------------
@@ -403,11 +429,11 @@ def sparse_attn(q, kv, sink, idxs, scale, f64):
         if ids.size == 0:
             continue                                # denom: exp(sink-(-inf))=inf -> 0
         k = kv[ids].astype(dt)
-        sc = (q[t].astype(dt) @ k.T) * dt(scale)    # [h, n]
+        sc = _mm(q[t].astype(dt), k.T) * dt(scale)    # [h, n]
         m = sc.max(axis=1, keepdims=True)
         p = np.exp(sc - m)
         p = _B(p, f64)                              # acc_s_cast to bf16
-        acc = p.astype(dt) @ k
+        acc = _mm(p.astype(dt), k)
         sum_exp = p.sum(axis=1) + np.exp(sink.astype(dt) - m[:, 0])
         o[t] = _B(acc / sum_exp[:, None], f64)
     return o
@@ -538,7 +564,7 @@ def indexer_forward(P, x, qr, start_pos, st, f64, interm):
     w = _B(w * dt(P["idx_dim"] ** -0.5 * P["idx_heads"] ** -0.5), f64)  # 418
     nb = end_pos // ratio
     kvc = st.idx_comp.cache[:nb].astype(dt)
-    sc = np.einsum("shd,td->sht", q.astype(dt), kvc)                   # 420
+    sc = np.stack([_mm(q[i].astype(dt), kvc.T) for i in range(q.shape[0])])                   # 420
     sc = _B(sc, f64)
     sc = _B(np.maximum(sc, 0) * w[:, :, None], f64).sum(axis=1, dtype=dt)  # 421
     sc = _B(sc, f64)
@@ -651,7 +677,7 @@ def attention_forward(P, x, start_pos, st: LayerState, f64, interm):
     G, o_lora = P["o_groups"], P["o_lora"]
     og = o.reshape(s, G, h * d // G)
     wo_a = P["wo_a"].reshape(G, o_lora, h * d // G)
-    y = np.stack([_B(og[:, g, :].astype(dt) @ wo_a[g].astype(dt).T, f64)
+    y = np.stack([_B(_mm(og[:, g, :].astype(dt), wo_a[g].astype(dt).T), f64)
                   for g in range(G)], axis=1)                                  # 541
     out = fp8_linear(_B(y.reshape(s, G * o_lora), f64), *P["wo_b"], f64)       # 542
     if interm is not None:
@@ -735,7 +761,7 @@ def hc_pre(h, fn, scale, base, cfg, f64, interm, tag):
     hc = cfg["hc_mult"]
     xf = h.reshape(s, hc * cfg["dim"]).astype(dt)
     rsqrt = 1.0 / np.sqrt((xf * xf).mean(-1, keepdims=True) + cfg["norm_eps"])
-    mixes = (xf @ fn.astype(dt).T) * rsqrt                       # line 678
+    mixes = _mm(xf, fn.astype(dt).T) * rsqrt                       # line 678
     pre, post, comb = hc_split_sinkhorn(mixes, scale, base, hc,
                                         cfg["hc_sinkhorn_iters"],
                                         cfg["hc_eps"], f64)
@@ -751,7 +777,8 @@ def hc_post(x, residual, post, comb, f64):
     """model.py:683-686: y_j = post_j * x + sum_i comb[i,j] * res_i."""
     dt = _dt(f64)
     y = (post[..., None].astype(dt) * x[:, None, :].astype(dt)
-         + np.einsum("sij,sid->sjd", comb.astype(dt), residual.astype(dt)))
+         + np.stack([_mm(comb[i].T.astype(dt), residual[i].astype(dt))
+                     for i in range(comb.shape[0])]))
     return _B(y, f64)
 
 
@@ -1346,7 +1373,7 @@ def hc_head_collapse(h, top, cfg, f64):
     s, hc = h.shape[0], cfg["hc_mult"]
     xf = h.reshape(s, hc * cfg["dim"]).astype(dt)
     rsqrt = 1.0 / np.sqrt((xf * xf).mean(-1, keepdims=True) + cfg["norm_eps"])
-    mixes = (xf @ top["hc_head_fn"].astype(dt).T) * rsqrt            # 731-732
+    mixes = _mm(xf, top["hc_head_fn"].astype(dt).T) * rsqrt            # 731-732
     pre = sigmoid(mixes * dt(top["hc_head_scale"][0])
                   + top["hc_head_base"].astype(dt)) + cfg["hc_eps"]  # 733
     y = (pre[..., None] * xf.reshape(s, hc, cfg["dim"])).sum(axis=1)  # 734
@@ -1366,7 +1393,7 @@ def model_forward(Ps, top, cfg, ids, states, start_pos, f64):
         h, _ = block_forward(P, cfg, h, ids, start_pos, states[i], f64)
     y = hc_head_collapse(h, top, cfg, f64)                 # 808 -> 720
     yn = rms_norm(y, top["norm"], cfg["norm_eps"], f64)    # 721 (bf16 out)
-    logits = yn.astype(dt) @ top["head"].astype(dt).T      # 715 f32 linear
+    logits = _mm(yn.astype(dt), top["head"].astype(dt).T)   # 715 f32 linear
     return logits, h
 
 
@@ -1856,7 +1883,7 @@ def mtp_forward(Pm, top, cfg, h, ids, start_pos, st, f64):
     x, _ = block_forward(Pm, cfg, x, ids, start_pos, st, f64)   # 764
     y = hc_head_collapse(x, Pm, cfg, f64)                 # 765 -> 720
     yn = rms_norm(y, Pm["norm"], cfg["norm_eps"], f64)    # 721
-    logits = yn.astype(dt) @ top["head"].astype(dt).T     # 715
+    logits = _mm(yn.astype(dt), top["head"].astype(dt).T)  # 715
     return logits, x
 
 

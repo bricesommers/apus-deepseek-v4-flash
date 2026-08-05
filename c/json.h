@@ -647,7 +647,7 @@ void json_py_float_repr(double d, char *buf, size_t cap) {
             sb_putc(&b, '.');
             sb_write(&b, digits + 1, (size_t)(nd - 1));
         }
-        char ebuf[16];
+        char ebuf[24];
         snprintf(ebuf, sizeof ebuf, "e%c%02ld", x < 0 ? '-' : '+', x < 0 ? -x : x);
         sb_puts(&b, ebuf);
     } else if (decpt <= 0) {

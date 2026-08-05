@@ -1,7 +1,14 @@
 /*
  * c/blas.h — Accelerate.framework (vecLib/AMX) FP32 GEMM path for the
- * batch-M prefill shapes (M9b). C11, macOS only (Accelerate is a system
+ * batch-M prefill shapes (M9b). C11, macOS/ARM only (Accelerate is a system
  * framework, linked like libSystem; see tests/m9b/README.md build notes).
+ *
+ * Non-Darwin / non-NEON builds (M12a-1 Linux/x86_64): APUS_BLAS == 0 and
+ * every entry point below is a compiled no-op stub; apus_blas_available()
+ * returns 0, so all dispatch sites (c/fp4.h, c/fp8.h, c/attn.h, c/layer.h,
+ * c/moe.h) unconditionally stay on their pinned non-BLAS paths (the scalar
+ * kernels on x86) at EVERY M — no OpenBLAS or any other dependency is
+ * introduced (libc + pthreads only, per project constraint).
  *
  * Dispatch contract:
  *   - M <  APUS_BLAS_M_MIN: caller keeps the M9a NEON kernels (decode GEMV
@@ -409,13 +416,6 @@ void apus_woa_gemm_blas(const uint16_t *wa, const float *x, float *y,
 
 int apus_blas_available(void) { return 0; }
 
-void apus_fp8_gemm_blas(const uint8_t *w, const uint8_t *ws,
-                        const uint8_t *acodes, const float *as,
-                        float *scratch, float *out,
-                        size_t M, size_t O, size_t K) {
-    (void)w; (void)ws; (void)acodes; (void)as; (void)scratch;
-    (void)out; (void)M; (void)O; (void)K;
-}
 void apus_fp8_gemm_blas(const uint8_t *w, const uint8_t *ws,
                         const uint8_t *acodes, const float *as,
                         float *scratch, float *out,

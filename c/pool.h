@@ -15,7 +15,8 @@
  * makes the partitioning irrelevant to the numerics.
  *
  * Thread count: APUS_THREADS env (>=1, clamped to 32); default =
- * performance-core count (hw.perflevel0.physicalcpu on macOS).
+ * performance-core count (hw.perflevel0.physicalcpu on macOS,
+ * sysconf(_SC_NPROCESSORS_ONLN) elsewhere).
  *
  * Scratch arena: apus_scratch_* is a grow-only thread-local segmented
  * bump allocator for the decode hot path (replaces per-call malloc/free
@@ -37,6 +38,8 @@
 
 #ifdef __APPLE__
 #include <sys/sysctl.h>
+#else
+#include <unistd.h>     /* sysconf(_SC_NPROCESSORS_ONLN) */
 #endif
 
 #ifdef __cplusplus
@@ -216,7 +219,7 @@ static inline void *apus_scratch_alloc(size_t bytes) {
             size_t cap = sc->cur > 0 ? 2 * sc->cap[sc->cur - 1]
                                      : (size_t)1 << 16;
             while (cap < bytes) cap *= 2;
-            sc->seg[sc->cur] = malloc(cap);
+            sc->seg[sc->cur] = aligned_alloc(64, cap);
             if (!sc->seg[sc->cur]) { sc->cur--; return NULL; }
             sc->cap[sc->cur] = cap;
             sc->nseg = sc->cur + 1;

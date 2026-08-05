@@ -1,0 +1,28 @@
+# apus — M12a-1 Linux/x86_64 dev/test image.
+#
+# Ubuntu 24.04 + gcc + make + python3 (numpy/safetensors/tokenizers for the
+# fixture generators and the m1 converter suite). No BLAS, no extra deps —
+# the project constraint is libc + pthreads only for the C engine.
+#
+# Build (from the repo root or anywhere):
+#   docker build --platform linux/amd64 -t apus-linux-dev:m12a1 \
+#       -f tools/docker/Dockerfile.dev tools/docker
+#
+# The pip layer is cached: rebuilding after repo changes does NOT reinstall
+# the Python deps (this file is the only build context input that matters).
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc libc6-dev make python3 python3-pip ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# ubuntu 24.04 marks the system Python externally-managed; a throwaway dev
+# container is exactly the --break-system-packages use case. Versions are
+# pinned loosely (floor only) per the M12a-1 spec.
+RUN pip3 install --no-cache-dir --break-system-packages \
+        "numpy>=1.26" "safetensors>=0.4" "tokenizers>=0.19"
+
+WORKDIR /src
+CMD ["bash"]

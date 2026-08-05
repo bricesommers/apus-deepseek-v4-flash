@@ -1,0 +1,72 @@
+{
+  "comment": "R1 golden-token battery: apus vs DeepSeek reference inference on DeepSeek-V4-Flash-0731. Each case runs greedy (temp 0) and, where noted, sampled with a fixed seed. Keep prompts EXACTLY as written — goldens depend on byte-exact prompts.",
+  "model": "deepseek-ai/DeepSeek-V4-Flash-0731",
+  "cases": [
+    {
+      "id": "france_greedy",
+      "prompt": "The capital of France is",
+      "max_tokens": 24,
+      "temp": 0,
+      "mode": "raw",
+      "note": "The standing apus smoke; short completion."
+    },
+    {
+      "id": "spain_chat",
+      "prompt": "What is the capital of Spain?",
+      "max_tokens": 64,
+      "temp": 0,
+      "mode": "chat",
+      "note": "Chat-mode (thinking off) short QA."
+    },
+    {
+      "id": "paris_thinking",
+      "prompt": "Make me a 2 days plan to visit the city of Paris",
+      "max_tokens": 2048,
+      "temp": 0,
+      "mode": "thinking",
+      "note": "Thinking-mode long reasoning; exercises the think block. (max_tokens 256->768: API counts reasoning inside max_tokens) (768->2048: API used 728/768 reasoning)"
+    },
+    {
+      "id": "math_thinking",
+      "prompt": "What is 347 multiplied by 89? Think step by step.",
+      "max_tokens": 512,
+      "temp": 0,
+      "mode": "thinking",
+      "note": "Arithmetic reasoning — sensitive to any numerical drift. (max_tokens 256->512: API counts reasoning inside max_tokens)"
+    },
+    {
+      "id": "code_chat",
+      "prompt": "Write a Python function that checks whether a string is a palindrome, ignoring spaces and case.",
+      "max_tokens": 256,
+      "temp": 0,
+      "mode": "chat",
+      "note": "Code generation, structured output."
+    },
+    {
+      "id": "cjk_thinking",
+      "prompt": "请用三句话解释什么是量子纠缠。",
+      "max_tokens": 384,
+      "temp": 0,
+      "mode": "thinking",
+      "note": "Multilingual (CJK) + thinking; exercises tokenizer edge cases. (max_tokens 192->384: API counts reasoning inside max_tokens)"
+    },
+    {
+      "id": "agentic_tool",
+      "prompt": "You are an autonomous agent with access to a weather tool. A user asks: what is the weather in Tokyo right now? Describe your next action.",
+      "max_tokens": 512,
+      "temp": 0,
+      "mode": "thinking",
+      "note": "Agentic-style reasoning (no actual tools provided). (max_tokens 192->512: API counts reasoning inside max_tokens)"
+    },
+    {
+      "id": "france_sampled",
+      "prompt": "The capital of France is",
+      "max_tokens": 64,
+      "temp": 1.0,
+      "top_p": 1.0,
+      "seed": 42,
+      "mode": "raw",
+      "note": "Sampled with fixed seed — RNG-stream comparison. Only valid if the reference run pins its RNG identically; see R1.md."
+    }
+  ]
+}

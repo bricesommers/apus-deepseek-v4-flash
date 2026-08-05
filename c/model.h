@@ -35,6 +35,7 @@
 #include "layer.h"
 #include "mhc.h"
 #include "st.h"
+#include "x86.h"   /* M12a-2: AVX2 runtime dispatch (no-op off x86-64) */
 
 #ifdef __cplusplus
 extern "C" {
@@ -248,7 +249,7 @@ static int apus_model_parse_config(ApusCfg *c, int *n_layers, int **ratios,
     {
         JVal *rs = json_obj_get(root, "rope_scaling");
         if (rs) {
-            double v_;
+            double v_ = 0.0;
             if (apus_cfg_num(rs, NULL, "factor", &v_) == 0) c->rope_factor = v_;
             if (apus_cfg_num(rs, NULL, "original_max_position_embeddings", &v_))
                 c->original_seq_len = (int)v_;
@@ -524,8 +525,73 @@ typedef struct {
     int64_t K;
 } ApusHeadJob;
 
+#if APUS_X86
+/* M12a-2: AVX2 head-GEMV rows — four rows per apus_dot4_*_x86 group
+ * (staged exact products, scalar sequential add order per row => bitwise
+ * identical to the scalar row loop, c/x86.h contract); trailing rows take
+ * the scalar loop. F32 direct, BF16 exactly widened. */
+APUS_TGT_AVX2
+static void apus_head_gemv_rows_avx2(const ApusHeadJob *j,
+                                     size_t o0, size_t o1) {
+    const ApusStTensor *head = j->head;
+    const float *x = j->x;
+    int64_t K = j->K;
+    size_t o = o0;
+    if (head->dtype == APUS_ST_F32) {
+        const float *w = (const float *)head->data;
+        for (; o + 4 <= o1; o += 4) {
+            const float *a[4] = { x, x, x, x };
+            const float *b[4] = { w + (int64_t)(o + 0) * K,
+                                  w + (int64_t)(o + 1) * K,
+                                  w + (int64_t)(o + 2) * K,
+                                  w + (int64_t)(o + 3) * K };
+            float d[4];
+            apus_dot4_f32_x86(a, b, (size_t)K, d);
+            for (int q = 0; q < 4; q++) j->out[o + (size_t)q] = d[q];
+        }
+        for (; o < o1; o++) {
+            const float *wr = w + (int64_t)o * K;
+            float acc = 0.0f;
+            for (int64_t k = 0; k < K; k++) acc += wr[k] * x[k];
+            j->out[o] = acc;
+        }
+    } else {
+        const uint16_t *w = (const uint16_t *)head->data;
+        for (; o + 4 <= o1; o += 4) {
+            const float *a[4] = { x, x, x, x };
+            const uint16_t *b[4] = { w + (int64_t)(o + 0) * K,
+                                     w + (int64_t)(o + 1) * K,
+                                     w + (int64_t)(o + 2) * K,
+                                     w + (int64_t)(o + 3) * K };
+            float d[4];
+            apus_dot4_bf16_x86(a, b, (size_t)K, d);
+            for (int q = 0; q < 4; q++) j->out[o + (size_t)q] = d[q];
+        }
+        for (; o < o1; o++) {
+            const uint16_t *wr = w + (int64_t)o * K;
+            float acc = 0.0f;
+            for (int64_t k = 0; k < K; k++) {
+                uint32_t u = (uint32_t)wr[k] << 16;
+                float f;
+                memcpy(&f, &u, 4);
+                acc += f * x[k];
+            }
+            j->out[o] = acc;
+        }
+    }
+}
+#endif
+
 static void apus_head_gemv_rows(void *vjob, size_t o0, size_t o1) {
     const ApusHeadJob *j = vjob;
+#if APUS_X86
+    /* M12a-2: bitwise-identical AVX2 rows when the CPU supports them. */
+    if (apus_x86_have_avx2()) {
+        atomic_fetch_add(&apus_x86_hits, 1);
+        apus_head_gemv_rows_avx2(j, o0, o1);
+        return;
+    }
+#endif
     const ApusStTensor *head = j->head;
     const float *x = j->x;
     int64_t K = j->K;

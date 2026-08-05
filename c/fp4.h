@@ -53,6 +53,7 @@
 #include <stdint.h>
 
 #include "pool.h"
+#include "x86.h"   /* M12a-2: AVX2 runtime dispatch (no-op off x86-64) */
 
 #ifdef __ARM_NEON
 #include <arm_neon.h>
@@ -135,6 +136,19 @@ void apus_fp4_gemv_neon(const uint8_t *w, const uint8_t *ws,
                         const uint8_t *acodes, const float *as,
                         float *scratch, float *out, size_t O, size_t K);
 void apus_fp4_gemm_neon(const uint8_t *w, const uint8_t *ws,
+                        const uint8_t *acodes, const float *as,
+                        float *scratch, float *out,
+                        size_t M, size_t O, size_t K);
+#endif
+
+#if APUS_X86
+/* M12a-2: AVX2 kernels — BITWISE identical to the scalar kernels (c/x86.h
+ * contract: exact FP4-code expand, staged exact products, scalar
+ * sequential summation order, (dot*sa)*sb in two rounded steps). */
+void apus_fp4_gemv_avx2(const uint8_t *w, const uint8_t *ws,
+                        const uint8_t *acodes, const float *as,
+                        float *scratch, float *out, size_t O, size_t K);
+void apus_fp4_gemm_avx2(const uint8_t *w, const uint8_t *ws,
                         const uint8_t *acodes, const float *as,
                         float *scratch, float *out,
                         size_t M, size_t O, size_t K);
@@ -616,6 +630,126 @@ void apus_fp4_gemm_neon(const uint8_t *w, const uint8_t *ws,
 
 #endif /* __ARM_NEON */
 
+/* -------------------------------------------------------------------------*/
+#if APUS_X86
+
+/* FP4 codes as int8 = LUT value * 2 (all exactly representable) — the x86
+ * copy of the NEON path's table. */
+static const int8_t apus_fp4_codes_s8_x86[16] = {
+    0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12
+};
+
+/* M12a-2: expand one packed 32-group (16 bytes) -> 32 FP32 LUT values,
+ * EXACT (same construction as apus_fp4_expand32_neon: nibble -> int8
+ * LUT*2 via a 16-entry shuffle table, low/high nibbles interleaved back
+ * to K order, widened, and the exact 0.5 folded in). */
+APUS_TGT_AVX2
+static inline void apus_fp4_expand32_x86(const uint8_t *p, float *out) {
+    const __m128i lut = _mm_loadu_si128((const __m128i *)apus_fp4_codes_s8_x86);
+    __m128i b = _mm_loadu_si128((const __m128i *)p);
+    __m128i lo = _mm_shuffle_epi8(lut, _mm_and_si128(b, _mm_set1_epi8(0x0F)));
+    __m128i hi = _mm_shuffle_epi8(lut, _mm_and_si128(_mm_srli_epi16(b, 4),
+                                                     _mm_set1_epi8(0x0F)));
+    __m128i q0 = _mm_unpacklo_epi8(lo, hi);   /* elements  0..15 */
+    __m128i q1 = _mm_unpackhi_epi8(lo, hi);   /* elements 16..31 */
+    const __m256 half = _mm256_set1_ps(0.5f);
+    _mm256_storeu_ps(out, _mm256_mul_ps(_mm256_cvtepi32_ps(
+        _mm256_cvtepi8_epi32(q0)), half));
+    _mm256_storeu_ps(out + 8, _mm256_mul_ps(_mm256_cvtepi32_ps(
+        _mm256_cvtepi8_epi32(_mm_srli_si128(q0, 8))), half));
+    _mm256_storeu_ps(out + 16, _mm256_mul_ps(_mm256_cvtepi32_ps(
+        _mm256_cvtepi8_epi32(q1)), half));
+    _mm256_storeu_ps(out + 24, _mm256_mul_ps(_mm256_cvtepi32_ps(
+        _mm256_cvtepi8_epi32(_mm_srli_si128(q1, 8))), half));
+}
+
+/* M12a-2: rows [o0, o1) of the AVX2 GEMM — BITWISE identical to
+ * apus_fp4_gemm_scalar_rows (c/x86.h contract): exact code expansion,
+ * per-element products computed 8-wide (same single rounding as the
+ * scalar mul, staged in place), per-32-group dots summed strictly in
+ * order, folds (dot*sa)*sb in two rounded steps in group order. Eight
+ * groups per chunk with eight independent accumulator chains (each chain
+ * IS the scalar group dot); trailing groups run one chain per group.
+ * Per-output values are M- and thread-count-independent. */
+APUS_TGT_AVX2
+static void apus_fp4_rows_avx2(const uint8_t *w, const uint8_t *ws,
+                               const float *as, const float *scratch,
+                               float *out, size_t M, size_t O, size_t K,
+                               size_t o0, size_t o1) {
+    const size_t nb = K / APUS_FP4_GROUP;
+    const size_t nab = apus_fp4_act_blocks(K);
+    float wdeq[8 * APUS_FP4_GROUP];            /* 8 staged groups */
+    for (size_t m = 0; m < M; m++) {
+        const float *adeq = scratch + m * K;
+        const float *am = as + m * nab;
+        for (size_t o = o0; o < o1; o++) {
+            const uint8_t *wp = w + o * (K / 2);
+            const uint8_t *sp = ws + o * nb;
+            float total = 0.0f;
+            size_t kb = 0;
+            for (; kb + 8 <= nb; kb += 8) {
+                for (int b = 0; b < 8; b++) {
+                    float *ob = wdeq + b * APUS_FP4_GROUP;
+                    apus_fp4_expand32_x86(wp + (kb + (size_t)b) * 16, ob);
+                    const float *ab = adeq + (kb + (size_t)b) * APUS_FP4_GROUP;
+                    for (int i = 0; i < (int)APUS_FP4_GROUP; i += 8)
+                        _mm256_storeu_ps(ob + i, _mm256_mul_ps(
+                            _mm256_loadu_ps(ob + i), _mm256_loadu_ps(ab + i)));
+                }
+                /* eight named chains (array accumulators spill — c/x86.h
+                 * dot4 note); adds stay in strict per-group order */
+                const float *w0 = wdeq,              *w1 = wdeq + 32;
+                const float *w2 = wdeq + 2 * 32,     *w3 = wdeq + 3 * 32;
+                const float *w4 = wdeq + 4 * 32,     *w5 = wdeq + 5 * 32;
+                const float *w6 = wdeq + 6 * 32,     *w7 = wdeq + 7 * 32;
+                float d0 = 0.0f, d1 = 0.0f, d2 = 0.0f, d3 = 0.0f;
+                float d4 = 0.0f, d5 = 0.0f, d6 = 0.0f, d7 = 0.0f;
+                for (int i = 0; i < (int)APUS_FP4_GROUP; i++) {
+                    d0 += w0[i]; d1 += w1[i]; d2 += w2[i]; d3 += w3[i];
+                    d4 += w4[i]; d5 += w5[i]; d6 += w6[i]; d7 += w7[i];
+                }
+                /* (dot*sa)*sb in two rounded steps, folds in group order */
+                total += (d0 * am[(kb + 0) / 4]) * apus_ue8m0_f32(sp[kb + 0]);
+                total += (d1 * am[(kb + 1) / 4]) * apus_ue8m0_f32(sp[kb + 1]);
+                total += (d2 * am[(kb + 2) / 4]) * apus_ue8m0_f32(sp[kb + 2]);
+                total += (d3 * am[(kb + 3) / 4]) * apus_ue8m0_f32(sp[kb + 3]);
+                total += (d4 * am[(kb + 4) / 4]) * apus_ue8m0_f32(sp[kb + 4]);
+                total += (d5 * am[(kb + 5) / 4]) * apus_ue8m0_f32(sp[kb + 5]);
+                total += (d6 * am[(kb + 6) / 4]) * apus_ue8m0_f32(sp[kb + 6]);
+                total += (d7 * am[(kb + 7) / 4]) * apus_ue8m0_f32(sp[kb + 7]);
+            }
+            for (; kb < nb; kb++) {   /* < 8 groups left */
+                float *ob = wdeq;
+                apus_fp4_expand32_x86(wp + kb * 16, ob);
+                const float *a = adeq + kb * APUS_FP4_GROUP;
+                float dot = 0.0f;
+                for (int i = 0; i < (int)APUS_FP4_GROUP; i++)
+                    dot += a[i] * ob[i];
+                total += (dot * am[kb / 4]) * apus_ue8m0_f32(sp[kb]);
+            }
+            out[m * O + o] = total;
+        }
+    }
+}
+
+void apus_fp4_gemv_avx2(const uint8_t *w, const uint8_t *ws,
+                        const uint8_t *acodes, const float *as,
+                        float *scratch, float *out, size_t O, size_t K) {
+    apus_act_dequant_all(acodes, scratch, K);
+    apus_fp4_rows_avx2(w, ws, as, scratch, out, 1, O, K, 0, O);
+}
+
+void apus_fp4_gemm_avx2(const uint8_t *w, const uint8_t *ws,
+                        const uint8_t *acodes, const float *as,
+                        float *scratch, float *out,
+                        size_t M, size_t O, size_t K) {
+    for (size_t m = 0; m < M; m++)
+        apus_act_dequant_all(acodes + m * K, scratch + m * K, K);
+    apus_fp4_rows_avx2(w, ws, as, scratch, out, M, O, K, 0, O);
+}
+
+#endif /* APUS_X86 */
+
 /* M9b: instantiate the BLAS (Accelerate) kernels in this TU — needs the
  * fp4 helpers above (apus_fp4_expand32_neon, apus_ue8m0_f32, ...). */
 #define APUS_BLAS_IMPLEMENTATION
@@ -640,6 +774,16 @@ static void apus_fp4_gemm_neon_rows(void *vjob, size_t o0, size_t o1) {
                             j->M, j->O, j->K, o0, o1);
 }
 #else
+#if APUS_X86
+/* Rows [o0, o1) of the AVX2 GEMM — delegates to the shared row body
+ * (apus_fp4_rows_avx2), bitwise identical to apus_fp4_gemm_scalar_rows
+ * for any row partition (c/x86.h contract). */
+static void apus_fp4_gemm_avx2_rows(void *vjob, size_t o0, size_t o1) {
+    const ApusFp4GemmJob *j = vjob;
+    apus_fp4_rows_avx2(j->w, j->ws, j->as, j->scratch, j->out,
+                       j->M, j->O, j->K, o0, o1);
+}
+#endif
 static void apus_fp4_gemm_scalar_rows(void *vjob, size_t o0, size_t o1) {
     const ApusFp4GemmJob *j = vjob;
     size_t M = j->M, O = j->O, K = j->K;
@@ -691,6 +835,14 @@ void apus_fp4_gemm_mt(const uint8_t *w, const uint8_t *ws,
 #else
     for (size_t m = 0; m < M; m++)
         apus_act_dequant_all(acodes + m * K, scratch + m * K, K);
+#if APUS_X86
+    /* M12a-2: AVX2 rows when supported — bitwise identical to the scalar
+     * rows, so dispatch is numerics-neutral. */
+    if (apus_x86_have_avx2()) {
+        atomic_fetch_add(&apus_x86_hits, 1);
+        apus_pool_run(O, apus_fp4_gemm_avx2_rows, &job);
+    } else
+#endif
     apus_pool_run(O, apus_fp4_gemm_scalar_rows, &job);
 #endif
 }
@@ -704,6 +856,40 @@ typedef struct {
     float *scratch;
     size_t O, K;
 } ApusFp4GemmGroupJob;
+
+/* Scalar per-entry rows of the grouped unit space — the pre-M12a-2 x86
+ * fallback (same math as apus_fp4_gemm_scalar_rows), factored out so both
+ * the non-AVX2 dispatch and non-x86 builds share it. */
+#if !defined(__ARM_NEON)
+static void apus_fp4_grouped_rows_scalar(const ApusFp4GemmGroupJob *j,
+                                         const ApusFp4GemmEnt *en,
+                                         size_t o, size_t o_end) {
+    size_t O = j->O, K = j->K;
+    size_t nb = K / APUS_FP4_GROUP;
+    size_t nab = apus_fp4_act_blocks(K);
+    const float *as = j->as;
+    for (size_t m = 0; m < en->M; m++) {
+        const float *adeq = j->scratch + (en->m0 + m) * K;
+        const float *am = as + (en->m0 + m) * nab;
+        for (size_t oo = o; oo < o_end; oo++) {
+            const uint8_t *wp = en->w + oo * (K / 2);
+            const uint8_t *sp = en->ws + oo * nb;
+            float total = 0.0f;
+            for (size_t kb = 0; kb < nb; kb++) {
+                float dot = 0.0f;
+                const uint8_t *p = wp + kb * (APUS_FP4_GROUP / 2);
+                const float *a = adeq + kb * APUS_FP4_GROUP;
+                for (size_t i = 0; i < APUS_FP4_GROUP / 2; i++) {
+                    dot += a[2 * i]     * apus_fp4_lut[p[i] & 0x0F];
+                    dot += a[2 * i + 1] * apus_fp4_lut[p[i] >> 4];
+                }
+                total += (dot * am[kb / 4]) * apus_ue8m0_f32(sp[kb]);
+            }
+            en->out[m * O + oo] = total;
+        }
+    }
+}
+#endif
 
 /* Units [u0, u1) of the entry-major unit space n_ent * O. Unit u = e * O + o
  * is output row o of entry e; a contiguous unit range clips to whole output
@@ -728,30 +914,20 @@ static void apus_fp4_gemm_grouped_units(void *vjob, size_t u0, size_t u1) {
                                 (const float *)((const float16_t *)j->scratch
                                                 + en->m0 * K),
                                 en->out, en->M, O, K, o, o_end);
-#else
-        /* scalar fallback: same math as apus_fp4_gemm_scalar_rows */
-        size_t nb = K / APUS_FP4_GROUP;
-        const float *as = j->as;
-        for (size_t m = 0; m < en->M; m++) {
-            const float *adeq = j->scratch + (en->m0 + m) * K;
-            const float *am = as + (en->m0 + m) * nab;
-            for (size_t oo = o; oo < o_end; oo++) {
-                const uint8_t *wp = en->w + oo * (K / 2);
-                const uint8_t *sp = en->ws + oo * nb;
-                float total = 0.0f;
-                for (size_t kb = 0; kb < nb; kb++) {
-                    float dot = 0.0f;
-                    const uint8_t *p = wp + kb * (APUS_FP4_GROUP / 2);
-                    const float *a = adeq + kb * APUS_FP4_GROUP;
-                    for (size_t i = 0; i < APUS_FP4_GROUP / 2; i++) {
-                        dot += a[2 * i]     * apus_fp4_lut[p[i] & 0x0F];
-                        dot += a[2 * i + 1] * apus_fp4_lut[p[i] >> 4];
-                    }
-                    total += (dot * am[kb / 4]) * apus_ue8m0_f32(sp[kb]);
-                }
-                en->out[m * O + oo] = total;
-            }
+#elif APUS_X86
+        /* M12a-2: AVX2 rows (bitwise == the scalar rows) when supported.
+         * Same base-pointer shift as the NEON branch. */
+        if (apus_x86_have_avx2()) {
+            atomic_fetch_add(&apus_x86_hits, 1);
+            apus_fp4_rows_avx2(en->w, en->ws,
+                               j->as + en->m0 * nab,
+                               j->scratch + en->m0 * K,
+                               en->out, en->M, O, K, o, o_end);
+        } else {
+            apus_fp4_grouped_rows_scalar(j, en, o, o_end);
         }
+#else
+        apus_fp4_grouped_rows_scalar(j, en, o, o_end);
 #endif
         u = (e + 1) * O;
     }
@@ -760,7 +936,9 @@ static void apus_fp4_gemm_grouped_units(void *vjob, size_t u0, size_t u1) {
 void apus_fp4_gemm_mt_grouped(const ApusFp4GemmEnt *ents, size_t n_ent,
                               const uint8_t *acodes, const float *as,
                               float *scratch, size_t O, size_t K) {
+#if APUS_BLAS
     size_t nab = apus_fp4_act_blocks(K);
+#endif
     /* Chunks of <=64 entries: fixed storage, any n_ent. Within a chunk,
      * BLAS-sized entries take the standalone fallback; the rest share one
      * pool dispatch over the entry-major unit space. */

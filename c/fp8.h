@@ -61,6 +61,7 @@
 
 #include "fp4.h"
 #include "pool.h"
+#include "x86.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -104,6 +105,20 @@ void apus_fp8_gemv_neon(const uint8_t *w, const uint8_t *ws,
                         const uint8_t *acodes, const float *as,
                         float *scratch, float *out, size_t O, size_t K);
 void apus_fp8_gemm_neon(const uint8_t *w, const uint8_t *ws,
+                        const uint8_t *acodes, const float *as,
+                        float *scratch, float *out,
+                        size_t M, size_t O, size_t K);
+#endif
+
+#if APUS_X86
+/* M12a-2: AVX2 kernels — BITWISE identical to the scalar kernels (c/x86.h
+ * contract: exact E4M3 expand, staged exact products, scalar sequential
+ * summation order). Runtime-dispatched; the scalar kernels remain the
+ * fallback on non-AVX2 x86-64. */
+void apus_fp8_gemv_avx2(const uint8_t *w, const uint8_t *ws,
+                        const uint8_t *acodes, const float *as,
+                        float *scratch, float *out, size_t O, size_t K);
+void apus_fp8_gemm_avx2(const uint8_t *w, const uint8_t *ws,
                         const uint8_t *acodes, const float *as,
                         float *scratch, float *out,
                         size_t M, size_t O, size_t K);
@@ -377,6 +392,112 @@ void apus_fp8_gemm_neon(const uint8_t *w, const uint8_t *ws,
 
 #endif /* __ARM_NEON */
 
+/* -------------------------------------------------------------------------*/
+#if APUS_X86
+
+/* M12a-2: rows [o0, o1) of the AVX2 GEMM — BITWISE identical to
+ * apus_fp8_gemm_scalar_rows (the normative scalar contract, c/x86.h):
+ * exact E4M3 expansion, per-element products computed 8-wide (same single
+ * rounding as the scalar mul, staged in place), and every sum in the
+ * scalar sequential order — per 128-block the dot adds its elements
+ * strictly in order, blocks fold into `total` in kb order with the scale
+ * product sc = as*ws rounded first. Eight full blocks are processed per
+ * chunk with eight independent accumulator chains to hide the FP-add
+ * latency; each chain IS the scalar block dot, so no reassociation. The
+ * trailing blocks (< 8 left, or the partial last block) run the same
+ * order with one chain per block. Per-output values are M- and
+ * thread-count-independent by construction. */
+APUS_TGT_AVX2
+static void apus_fp8_rows_avx2(const uint8_t *w, const uint8_t *ws,
+                               const float *as, const float *scratch,
+                               float *out, size_t M, size_t O, size_t K,
+                               size_t o0, size_t o1) {
+    const size_t nb = apus_fp8_blocks(K);
+    const size_t nfull = K / APUS_FP8_GROUP;   /* full 128-blocks */
+    float wdeq[8 * APUS_FP8_GROUP];            /* 8 staged blocks */
+    for (size_t m = 0; m < M; m++) {
+        const float *adeq = scratch + m * K;
+        const float *am = as + m * nb;
+        for (size_t o = o0; o < o1; o++) {
+            const uint8_t *wp = w + o * K;
+            const uint8_t *sp = ws + (o / APUS_FP8_GROUP) * nb;
+            float total = 0.0f;
+            size_t kb = 0;
+            for (; kb + 8 <= nfull; kb += 8) {
+                for (int b = 0; b < 8; b++) {
+                    float *ob = wdeq + b * APUS_FP8_GROUP;
+                    const uint8_t *pb = wp + (kb + (size_t)b) * APUS_FP8_GROUP;
+                    for (int i = 0; i < 8; i++)
+                        apus_e4m3_expand16_x86(pb + 16 * i, ob + 16 * i);
+                    /* in-place exact products with this block's acts */
+                    const float *ab = adeq + (kb + (size_t)b) * APUS_FP8_GROUP;
+                    for (int i = 0; i < (int)APUS_FP8_GROUP; i += 8)
+                        _mm256_storeu_ps(ob + i, _mm256_mul_ps(
+                            _mm256_loadu_ps(ob + i), _mm256_loadu_ps(ab + i)));
+                }
+                /* eight named chains (array accumulators spill — c/x86.h
+                 * dot4 note); adds stay in strict per-block order */
+                const float *w0 = wdeq,               *w1 = wdeq + 128;
+                const float *w2 = wdeq + 2 * 128,     *w3 = wdeq + 3 * 128;
+                const float *w4 = wdeq + 4 * 128,     *w5 = wdeq + 5 * 128;
+                const float *w6 = wdeq + 6 * 128,     *w7 = wdeq + 7 * 128;
+                float d0 = 0.0f, d1 = 0.0f, d2 = 0.0f, d3 = 0.0f;
+                float d4 = 0.0f, d5 = 0.0f, d6 = 0.0f, d7 = 0.0f;
+                for (int i = 0; i < (int)APUS_FP8_GROUP; i++) {
+                    d0 += w0[i]; d1 += w1[i]; d2 += w2[i]; d3 += w3[i];
+                    d4 += w4[i]; d5 += w5[i]; d6 += w6[i]; d7 += w7[i];
+                }
+                float sc0 = am[kb + 0] * apus_ue8m0_f32(sp[kb + 0]);
+                float sc1 = am[kb + 1] * apus_ue8m0_f32(sp[kb + 1]);
+                float sc2 = am[kb + 2] * apus_ue8m0_f32(sp[kb + 2]);
+                float sc3 = am[kb + 3] * apus_ue8m0_f32(sp[kb + 3]);
+                float sc4 = am[kb + 4] * apus_ue8m0_f32(sp[kb + 4]);
+                float sc5 = am[kb + 5] * apus_ue8m0_f32(sp[kb + 5]);
+                float sc6 = am[kb + 6] * apus_ue8m0_f32(sp[kb + 6]);
+                float sc7 = am[kb + 7] * apus_ue8m0_f32(sp[kb + 7]);
+                total += d0 * sc0; total += d1 * sc1;
+                total += d2 * sc2; total += d3 * sc3;
+                total += d4 * sc4; total += d5 * sc5;
+                total += d6 * sc6; total += d7 * sc7;
+            }
+            for (; kb < nb; kb++) {   /* < 8 left, or the partial block */
+                size_t lo = kb * APUS_FP8_GROUP;
+                size_t hi = lo + APUS_FP8_GROUP;
+                if (hi > K) hi = K;
+                size_t len = hi - lo, i = 0;
+                for (; i + 16 <= len; i += 16)
+                    apus_e4m3_expand16_x86(wp + lo + i, wdeq + i);
+                for (; i < len; i++)
+                    wdeq[i] = apus_e4m3_dequant_f32(wp[lo + i]);
+                float dot = 0.0f;
+                for (i = 0; i < len; i++)
+                    dot += adeq[lo + i] * wdeq[i];
+                float sc = am[kb] * apus_ue8m0_f32(sp[kb]);
+                total += dot * sc;
+            }
+            out[m * O + o] = total;
+        }
+    }
+}
+
+void apus_fp8_gemv_avx2(const uint8_t *w, const uint8_t *ws,
+                        const uint8_t *acodes, const float *as,
+                        float *scratch, float *out, size_t O, size_t K) {
+    apus_fp8_act_dequant_all(acodes, scratch, K);
+    apus_fp8_rows_avx2(w, ws, as, scratch, out, 1, O, K, 0, O);
+}
+
+void apus_fp8_gemm_avx2(const uint8_t *w, const uint8_t *ws,
+                        const uint8_t *acodes, const float *as,
+                        float *scratch, float *out,
+                        size_t M, size_t O, size_t K) {
+    for (size_t m = 0; m < M; m++)
+        apus_fp8_act_dequant_all(acodes + m * K, scratch + m * K, K);
+    apus_fp8_rows_avx2(w, ws, as, scratch, out, M, O, K, 0, O);
+}
+
+#endif /* APUS_X86 */
+
 /* --- M6c threaded variant (c/pool.h row partition) ------------------------*/
 
 typedef struct {
@@ -396,6 +517,16 @@ static void apus_fp8_gemm_neon_rows(void *vjob, size_t o0, size_t o1) {
                             j->M, j->O, j->K, o0, o1);
 }
 #else
+#if APUS_X86
+/* Rows [o0, o1) of the AVX2 GEMM — delegates to the shared row body
+ * (apus_fp8_rows_avx2), bitwise identical to apus_fp8_gemm_scalar_rows for
+ * any row partition (c/x86.h contract). */
+static void apus_fp8_gemm_avx2_rows(void *vjob, size_t o0, size_t o1) {
+    const ApusFp8GemmJob *j = vjob;
+    apus_fp8_rows_avx2(j->w, j->ws, j->as, j->scratch, j->out,
+                       j->M, j->O, j->K, o0, o1);
+}
+#endif
 static void apus_fp8_gemm_scalar_rows(void *vjob, size_t o0, size_t o1) {
     const ApusFp8GemmJob *j = vjob;
     size_t M = j->M, O = j->O, K = j->K;
@@ -442,6 +573,14 @@ void apus_fp8_gemm_mt(const uint8_t *w, const uint8_t *ws,
 #ifdef __ARM_NEON
     apus_pool_run(O, apus_fp8_gemm_neon_rows, &job);
 #else
+#if APUS_X86
+    /* M12a-2: AVX2 rows when the CPU supports them — bitwise identical to
+     * the scalar rows, so dispatch is numerics-neutral. */
+    if (apus_x86_have_avx2()) {
+        atomic_fetch_add(&apus_x86_hits, 1);
+        apus_pool_run(O, apus_fp8_gemm_avx2_rows, &job);
+    } else
+#endif
     apus_pool_run(O, apus_fp8_gemm_scalar_rows, &job);
 #endif
 }

@@ -50,6 +50,7 @@
 
 #include "st.h"
 #include "backend_metal.h"
+#include "x86.h"   /* M12a-2: AVX2 runtime dispatch (no-op off x86-64) */
 
 #ifdef __cplusplus
 extern "C" {
@@ -470,10 +471,51 @@ typedef struct {
     int round_out;          /* bf16_linear: BF16-round each output */
 } ApusF32LinearJob;
 
+#if APUS_X86
+/* M12a-2: AVX2 row body for both linear variants — four rows per
+ * apus_dot4_f32_x86 group (staged exact products, scalar sequential add
+ * order per row => bitwise identical to apus_dot_f32_scalar per row,
+ * c/x86.h contract); trailing rows take the scalar loop. round_out
+ * selects the BF16 output round, matching the two scalar workers. */
+APUS_TGT_AVX2
+static void apus_f32_linear_rows_avx2(const ApusF32LinearJob *j,
+                                      size_t r0, size_t r1) {
+    size_t r = r0;
+    for (; r + 4 <= r1; r += 4) {
+        const float *a[4], *b[4];
+        for (int q = 0; q < 4; q++) {
+            size_t m = (r + (size_t)q) / (size_t)j->O;
+            size_t o = (r + (size_t)q) % (size_t)j->O;
+            a[q] = j->x + m * (size_t)j->K;
+            b[q] = j->w + o * (size_t)j->K;
+        }
+        float d[4];
+        apus_dot4_f32_x86(a, b, (size_t)j->K, d);
+        for (int q = 0; q < 4; q++)
+            j->out[r + (size_t)q] = j->round_out ? apus_bf16_round(d[q])
+                                                 : d[q];
+    }
+    for (; r < r1; r++) {
+        size_t m = r / (size_t)j->O, o = r % (size_t)j->O;
+        float acc = apus_dot_f32_scalar(j->x + m * (size_t)j->K,
+                                        j->w + o * (size_t)j->K, (size_t)j->K);
+        j->out[r] = j->round_out ? apus_bf16_round(acc) : acc;
+    }
+}
+#endif
+
 /* Scalar-order row worker (bitwise identical to the pre-M6c scalar
  * apus_f32_linear — see apus_dot_f32_scalar note). */
 static void apus_f32_linear_rows_scalar(void *vjob, size_t r0, size_t r1) {
     const ApusF32LinearJob *j = vjob;
+#if APUS_X86
+    /* M12a-2: bitwise-identical AVX2 rows when the CPU supports them. */
+    if (apus_x86_have_avx2()) {
+        atomic_fetch_add(&apus_x86_hits, 1);
+        apus_f32_linear_rows_avx2(j, r0, r1);
+        return;
+    }
+#endif
     for (size_t r = r0; r < r1; r++) {
         size_t m = r / (size_t)j->O, o = r % (size_t)j->O;
         j->out[r] = apus_dot_f32_scalar(j->x + m * (size_t)j->K,
@@ -485,6 +527,13 @@ static void apus_f32_linear_rows_scalar(void *vjob, size_t r0, size_t r1) {
  * identical to the pre-M6c scalar apus_bf16_linear). */
 static void apus_f32_linear_rows_bf16(void *vjob, size_t r0, size_t r1) {
     const ApusF32LinearJob *j = vjob;
+#if APUS_X86
+    if (apus_x86_have_avx2()) {
+        atomic_fetch_add(&apus_x86_hits, 1);
+        apus_f32_linear_rows_avx2(j, r0, r1);
+        return;
+    }
+#endif
     for (size_t r = r0; r < r1; r++) {
         size_t m = r / (size_t)j->O, o = r % (size_t)j->O;
         float acc = apus_dot_f32_scalar(j->x + m * (size_t)j->K,
@@ -1069,6 +1118,10 @@ static void apus_sparse_attn_head(void *vjob, size_t r0, size_t r1) {
     ApusScratchMark mk = apus_scratch_mark();   /* worker-local TLS */
     float *sc = apus_scratch_alloc((size_t)idxw * sizeof(float));
     float *p = apus_scratch_alloc((size_t)idxw * sizeof(float));
+#if APUS_X86
+    const int use_avx2 = apus_x86_have_avx2();
+    if (use_avx2) atomic_fetch_add(&apus_x86_hits, 1);
+#endif
     for (size_t r = r0; r < r1; r++) {
         size_t t = r / (size_t)h, hh = r % (size_t)h;
         int n = j->ns[t];
@@ -1080,7 +1133,31 @@ static void apus_sparse_attn_head(void *vjob, size_t r0, size_t r1) {
         const int32_t *ids = j->idsf + t * (size_t)idxw;
         const float *qv = j->q + (t * (size_t)h + hh) * d;
         float mx = -INFINITY;
-        for (int jj = 0; jj < n; jj++) {
+        int jj = 0;
+#if APUS_X86
+        /* M12a-2: four q.k dots per apus_dot4_f32_x86 group — bitwise
+         * identical to the scalar apus_dot_f32_scalar per dot (c/x86.h);
+         * sc/mx updates stay in jj order. */
+        if (use_avx2) {
+            for (; jj + 4 <= n; jj += 4) {
+                const float *a[4], *b[4];
+                for (int q = 0; q < 4; q++) {
+                    int32_t id = ids[jj + q];
+                    a[q] = qv;
+                    b[q] = id < j->na
+                        ? j->kv_a + (size_t)id * d
+                        : j->kv_b + (size_t)(id - j->na) * d;
+                }
+                float d4[4];
+                apus_dot4_f32_x86(a, b, (size_t)d, d4);
+                for (int q = 0; q < 4; q++) {
+                    sc[jj + q] = d4[q] * j->scale;
+                    if (sc[jj + q] > mx) mx = sc[jj + q];
+                }
+            }
+        }
+#endif
+        for (; jj < n; jj++) {
             const float *kv = ids[jj] < j->na
                 ? j->kv_a + (size_t)ids[jj] * d
                 : j->kv_b + (size_t)(ids[jj] - j->na) * d;
@@ -1109,6 +1186,15 @@ static void apus_sparse_attn_head(void *vjob, size_t r0, size_t r1) {
             for (; k + 4 <= (size_t)d; k += 4)
                 vst1q_f32(ov + k, vfmaq_f32(vld1q_f32(ov + k), pj,
                                             vld1q_f32(kv + k)));
+#endif
+#if APUS_X86
+            /* M12a-2: mul+add (TWO roundings) per element — bitwise vs the
+             * x86 scalar loop (NOT fused like the NEON vfmaq above; the
+             * x86 anchor is the scalar mul+add, c/x86.h). */
+            if (use_avx2) {
+                apus_saxpy_x86(ov, p[jj], kv, (size_t)d);
+                k = (size_t)d;
+            }
 #endif
             for (; k < (size_t)d; k++) ov[k] += p[jj] * kv[k];
         }
@@ -1212,8 +1298,55 @@ typedef struct {
     int s, G, ol, sub, hd;
 } ApusWoAJob;
 
+#if APUS_X86
+/* M12a-2: AVX2 wo_a rows — four rows per apus_dot4_bf16_x86 group
+ * (exactly-widened BF16, staged exact products, scalar sequential add
+ * order per row => bitwise identical to the scalar row loop, c/x86.h
+ * contract — note this takes NO reorder budget, unlike the NEON path);
+ * trailing rows take the scalar loop. */
+APUS_TGT_AVX2
+static void apus_woa_rows_avx2(const ApusWoAJob *j, size_t r0, size_t r1) {
+    size_t gl = (size_t)j->G * j->ol;
+    size_t n = (size_t)j->sub;
+    size_t r = r0;
+    for (; r + 4 <= r1; r += 4) {
+        const float *a[4];
+        const uint16_t *b[4];
+        for (int q = 0; q < 4; q++) {
+            size_t rr = r + (size_t)q;
+            size_t t = rr / gl, rem = rr % gl;
+            size_t g = rem / (size_t)j->ol, jj = rem % (size_t)j->ol;
+            a[q] = j->o + t * (size_t)j->hd + g * (size_t)j->sub;
+            b[q] = j->wa + (g * (size_t)j->ol + jj) * (size_t)j->sub;
+        }
+        float d[4];
+        apus_dot4_bf16_x86(a, b, n, d);
+        for (int q = 0; q < 4; q++)
+            j->y[r + (size_t)q] = apus_bf16_round(d[q]);
+    }
+    for (; r < r1; r++) {
+        size_t t = r / gl, rr = r % gl;
+        size_t g = rr / (size_t)j->ol, jj = rr % (size_t)j->ol;
+        const float *og = j->o + t * (size_t)j->hd + g * (size_t)j->sub;
+        const uint16_t *wr = j->wa + (g * (size_t)j->ol + jj) * (size_t)j->sub;
+        float dot = 0.0f;
+        for (size_t k = 0; k < n; k++)
+            dot += og[k] * apus_bf16_f32(wr[k]);
+        j->y[r] = apus_bf16_round(dot);
+    }
+}
+#endif
+
 static void apus_woa_rows(void *vjob, size_t r0, size_t r1) {
     const ApusWoAJob *j = vjob;
+#if APUS_X86
+    /* M12a-2: bitwise-identical AVX2 rows when the CPU supports them. */
+    if (apus_x86_have_avx2()) {
+        atomic_fetch_add(&apus_x86_hits, 1);
+        apus_woa_rows_avx2(j, r0, r1);
+        return;
+    }
+#endif
     size_t gl = (size_t)j->G * j->ol;
     for (size_t r = r0; r < r1; r++) {
         size_t t = r / gl, rr = r % gl;

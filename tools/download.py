@@ -95,6 +95,11 @@ class Driver:
 
     # -- shard list ----------------------------------------------------------
 
+    # Small support files the engine needs next to the converted container:
+    # tokenizer + generation config (weights are useless without them).
+    SUPPORT_FILES = ("tokenizer.json", "tokenizer_config.json",
+                     "generation_config.json")
+
     def shard_names(self):
         index_path = os.path.join(self.work_dir, INDEX_NAME)
         if not os.path.exists(index_path):
@@ -104,6 +109,14 @@ class Driver:
                 self._fetch_small(CONFIG_NAME)
             except Exception:
                 pass  # config is optional for conversion
+        for name in self.SUPPORT_FILES:
+            dst = os.path.join(self.out_dir, name)
+            if not os.path.exists(dst):
+                try:
+                    self._fetch_small(name)
+                    shutil.copyfile(os.path.join(self.work_dir, name), dst)
+                except Exception:
+                    pass  # tokenizer files are only needed at run time
         # convert.py expects config/index next to the shards it reads.
         for small in (INDEX_NAME, CONFIG_NAME):
             src = os.path.join(self.work_dir, small)

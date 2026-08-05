@@ -37,10 +37,15 @@ first, throughput second.
 - **Externally validated** — R1b compared apus against DeepSeek-V4-Flash-0731
   hosted on DeepSeek's API side-by-side: zero contradictions, zero factual
   errors across the test battery (see `docs/R1B-RESULTS.md`).
+- **Portable** — builds and passes the full test battery on macOS/ARM
+  (clang, NEON, optional Metal) and Linux/x86_64 (gcc, AVX2 kernels with
+  scalar fallbacks; libc + pthreads only, no BLAS dependency).
 
 ## Requirements
 
-- Apple Silicon Mac (M1 or later), macOS with Xcode command line tools
+- Apple Silicon Mac (M1 or later), macOS with Xcode command line tools —
+  or Linux/x86_64 with gcc and make (engine + test battery; the tiered
+  expert store is tuned for Apple Silicon unified memory)
 - **≥ 16 GB unified memory** (32 GB recommended; the tiered store trades
   speed for memory headroom)
 - **~180 GB free disk** (weights container + one source shard during
@@ -113,11 +118,58 @@ identical tokens — insufficient memory may cost speed, never output
 quality. The external R1b validation against DeepSeek's hosted API is
 written up in `docs/R1B-RESULTS.md`.
 
+## Testing
+
+Every milestone shipped with a hard-gate suite under `tests/`; the full
+battery is what CI runs. Fixture/golden directories are gitignored and
+regenerated deterministically by the make targets. On macOS the suites
+use the local venv python; elsewhere pass `PY=python3`.
+
+| Target | Suite |
+|---|---|
+| `test-m2` | Tokenizer + chat encoding, byte-exact vs DeepSeek's reference |
+| `test-m3` | MXFP4 (E2M1 + UE8M0) kernel hard gate |
+| `test-m4a` | FP8 (E4M3) dense kernel + mHC hard gate |
+| `test-m4c` | C single-layer forward vs the M4b oracle goldens |
+| `test-m5` | Full-model forward pass, end-to-end on a synthetic mini-model |
+| `test-m6a` | Expert-store tiering (NVMe slabs, bounded RAM cache) |
+| `test-m6b` | Router-lookahead prefetch ("pilot") + recall measurement |
+| `test-m6c` | Decode performance pass (threading, routing, scratch, VM pressure) |
+| `test-m7a` | OpenAI-compatible server end-to-end (scripted fixtures) |
+| `test-m7b` | Metal GPU backend (macOS only) |
+| `test-m8` | MTP speculative decoding (spec == non-spec, bitwise) |
+| `test-m9a`–`test-m9e` | Kernel/dispatch rework gates (NEON ILP, BLAS dispatch, expert-I/O pipelining, prefill utilization, cache-bound dispatch) |
+| `check-m11a` | DSpark oracle self-consistency (numpy) |
+| `test-m11b` | DSpark speculative decoding in C (bitwise vs oracle) |
+| `test-m12a2` | x86 kernel gates (AVX2 vs scalar anchor, bitwise) |
+| `tests/m1` | Converter/downloader python suite: `python3 -m unittest discover -s tests/m1` |
+| `tests/r1b` | API-comparison tooling unit tests: `python3 tests/r1b/test_compare.py`, `python3 tests/r1b/test_compare_api.py` |
+
+On macOS/ARM, or in Docker for Linux/x86_64 (`tools/docker/test-linux.sh`
+runs the whole portable battery in an ubuntu:24.04 container):
+
+```sh
+tools/docker/test-linux.sh                    # full portable battery
+tools/docker/test-linux.sh test-m3 test-m4c   # selected targets
+```
+
+## CI
+
+GitHub Actions (`.github/workflows/ci.yml`) runs the full battery on every
+push to `main`: a `linux` job (ubuntu-latest, gcc/x86_64) and a `macos`
+job (macos-latest, clang/NEON + the Metal suite). There is no Windows job
+yet — the engine uses pthreads and POSIX file I/O throughout.
+
 ## Repository layout
 
 - `c/` — the engine: C11 header-only core + `apus.c` CLI/server driver +
-  optional Metal backend (`backend_metal.mm`)
-- `tools/` — download/convert driver, chat client, OpenAI server
+  optional Metal backend (`backend_metal.mm`) + x86 kernels (`x86.h`)
+- `tools/` — download/convert driver, chat client, OpenAI server,
+  dockerized Linux test harness (`tools/docker/`)
+- `tests/` — the milestone test battery (see Testing above)
+- `reference/`, `reference-0731/` — DeepSeek's MIT-licensed reference
+  implementations, tokenizer, and configs (both model revisions) that the
+  gates verify against (see `LICENSE.deepseek` in each)
 - `docs/` — architecture, usage, howto, R1/R1b validation writeups
 
 ## License and notices

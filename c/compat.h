@@ -5,6 +5,20 @@
  * for streaming weight reads that must not evict the page cache), and env
  * parsing helpers for the APUS_* tuning knobs.
  *
+ * Linux port (M12a-1) shim list:
+ *   - apus_rss_bytes: /proc/self/statm (current RSS in pages), matching the
+ *     mach resident_size semantics; getrusage ru_maxrss (peak RSS) remains
+ *     the last-resort fallback on non-Linux non-Apple platforms.
+ *   - apus_fd_nocache: no Linux equivalent is engaged (O_DIRECT is NOT
+ *     trivially safe — it imposes buffer/offset/length alignment the slab
+ *     pread path does not currently guarantee), so it returns -1 and reads
+ *     stay page-cached. Cache-pressure hygiene is left to the kernel's
+ *     reclaim heuristics; revisit with posix_fadvise(NT_DOREUSE) or aligned
+ *     O_DIRECT buffers when the Linux port is tuned (M12a-2+).
+ *   - apus_fadvise_dontneed: posix_fadvise(POSIX_FADV_DONTNEED) when the
+ *     caller passes a real fd (fd >= 0); a deliberate no-op for fd < 0
+ *     (c/cache.h passes -1 where macOS F_NOCACHE already covers it).
+ *
  * C11, libc only. Usage: #define APUS_COMPAT_IMPLEMENTATION in one TU.
  */
 #ifndef APUS_COMPAT_H
@@ -50,6 +64,10 @@ int    apus_env_int(const char *name, int def);
 #else
 #include <sys/resource.h>
 #include <sys/time.h>
+#ifdef __linux__
+#include <stdio.h>      /* /proc/self/statm */
+#include <fcntl.h>      /* posix_fadvise */
+#endif
 #endif
 
 uint64_t apus_rss_bytes(void) {
@@ -60,6 +78,21 @@ uint64_t apus_rss_bytes(void) {
                   (task_info_t)&info, &count) != KERN_SUCCESS)
         return 0;
     return (uint64_t)info.resident_size;
+#elif defined(__linux__)
+    /* Current RSS (pages) from /proc/self/statm — the mach resident_size
+     * analogue (getrusage ru_maxrss is the PEAK, not the current RSS, so it
+     * would mis-fire the c/cache.h RSS guard after any historical spike). */
+    FILE *f = fopen("/proc/self/statm", "r");
+    if (f) {
+        unsigned long total = 0, resident = 0;
+        int ok = fscanf(f, "%lu %lu", &total, &resident);
+        fclose(f);
+        if (ok == 2)
+            return (uint64_t)resident * 4096u;   /* PAGE_SIZE on x86_64 */
+    }
+    struct rusage ru;
+    if (getrusage(RUSAGE_SELF, &ru)) return 0;
+    return (uint64_t)ru.ru_maxrss * 1024;   /* Linux: KiB; macOS: bytes */
 #else
     struct rusage ru;
     if (getrusage(RUSAGE_SELF, &ru)) return 0;
@@ -71,14 +104,26 @@ int apus_fd_nocache(int fd) {
 #ifdef __APPLE__
     return fcntl(fd, F_NOCACHE, 1);
 #else
+    /* Linux: no uncached-read fd mode engaged (see the header shim list —
+     * O_DIRECT's alignment rules make it non-trivial here). -1 = "cached",
+     * which every caller already handles. */
     (void)fd;
     return -1;
 #endif
 }
 
 void apus_fadvise_dontneed(int fd, uint64_t off, uint64_t len) {
+#if defined(__APPLE__)
     (void)fd; (void)off; (void)len;
     /* macOS: F_NOCACHE on the streaming fd covers the hygiene (see header). */
+#elif defined(__linux__)
+    /* Real hygiene shim: drop the streaming-read pages from the page cache.
+     * fd < 0 is a deliberate no-op (c/cache.h's F_NOCACHE-covered call site). */
+    if (fd >= 0)
+        (void)posix_fadvise(fd, (off_t)off, (off_t)len, POSIX_FADV_DONTNEED);
+#else
+    (void)fd; (void)off; (void)len;
+#endif
 }
 
 size_t apus_env_mb(const char *name, size_t def_mb) {

@@ -23,12 +23,18 @@ c/compat.h, c/pilot.h, and c/apus.c.
 DeepSeek-AI
 -----------
 
-The DeepSeek-V4-Flash / DeepSeek-V4-Flash-0731 model weights, tokenizer,
-and chat-encoding format are made available by DeepSeek-AI under the MIT
-License. They are NOT part of this repository: tools/download.py fetches
-them from Hugging Face (deepseek-ai/DeepSeek-V4-Flash-0731). apus's
-tokenizer and message encoding were validated byte-exactly against
-DeepSeek-AI's MIT-licensed reference implementations.
+The DeepSeek-V4-Flash / DeepSeek-V4-Flash-0731 model weights are made
+available by DeepSeek-AI under the MIT License. They are NOT part of this
+repository: tools/download.py fetches them from Hugging Face
+(deepseek-ai/DeepSeek-V4-Flash-0731).
+
+DeepSeek-AI's reference materials — the chat-encoding reference
+implementation, conformance pairs, inference reference code, tokenizer,
+and model configs, for both model revisions — ARE included under
+`reference/` and `reference-0731/` (the test battery verifies against
+them), under the MIT License; see `LICENSE.deepseek` in each directory.
+apus's tokenizer and message encoding were validated byte-exactly against
+these reference implementations.
 
 apus is an independent project and is not affiliated with, endorsed by, or
 sponsored by DeepSeek-AI or the colibri project.

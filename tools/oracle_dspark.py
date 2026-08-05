@@ -270,7 +270,7 @@ def main_forward_dspark(Ps, top, cfg, ids, states, start_pos, f64):
             mains.append(base._B(h.astype(dt).mean(axis=1), f64))
     y = base.hc_head_collapse(h, top, cfg, f64)
     yn = base.rms_norm(y, top["norm"], cfg["norm_eps"], f64)
-    logits = yn.astype(dt) @ top["head"].astype(dt).T
+    logits = base._mm(yn.astype(dt), top["head"].astype(dt).T)
     mh = np.stack(mains, axis=1).reshape(len(ids), -1)
     return logits, mh
 
@@ -380,7 +380,7 @@ def dspark_attn_decode(P, x, start_pos, st, f64):
     G, o_lora = P["o_groups"], P["o_lora"]
     og = o.reshape(B, G, h * d // G)
     wo_a = P["wo_a"].reshape(G, o_lora, h * d // G)
-    y = np.stack([base._B(og[:, g, :].astype(dt) @ wo_a[g].astype(dt).T, f64)
+    y = np.stack([base._B(base._mm(og[:, g, :].astype(dt), wo_a[g].astype(dt).T), f64)
                   for g in range(G)], axis=1)                         # 788-790
     return base.fp8_linear(base._B(y.reshape(B, G * o_lora), f64),
                            *P["wo_b"], f64)                           # 791
@@ -452,13 +452,13 @@ def dspark_draft_round(Pd, top, cfg, anchor, main_x_row, start_pos, dstates,
     P2 = Pd[-1]
     x = base.hc_head_collapse(h, P2, cfg, f64)                        # 862
     yn = base.rms_norm(x, P2["norm"], cfg["norm_eps"], f64)           # 863
-    logits = yn.astype(dt) @ top["head"].astype(dt).T                 # 863
+    logits = base._mm(yn.astype(dt), top["head"].astype(dt).T)                 # 863
     logits_base = logits.copy()
     biases, embeds, margins = [], [], []
     out_ids = [int(anchor)]                                           # 864-865
     for i in range(B):
         e = P2["markov_w1"][out_ids[i]]                               # 802
-        bias = e.astype(dt) @ P2["markov_w2"].astype(dt).T            # 803
+        bias = base._mm(e.astype(dt), P2["markov_w2"].astype(dt).T)            # 803
         logits[i] = logits[i] + bias                                  # 869
         biases.append(bias)
         embeds.append(e)
@@ -468,7 +468,7 @@ def dspark_draft_round(Pd, top, cfg, anchor, main_x_row, start_pos, dstates,
         margins.append(marg)
     # confidence over cat([pre-norm hidden, markov embeds]) (model.py:872-873)
     conf_in = np.concatenate([x, np.stack(embeds).astype(dt)], axis=-1)
-    conf = (conf_in @ P2["conf_proj"].astype(dt).T)[:, 0]             # 815
+    conf = base._mm(conf_in, P2["conf_proj"].astype(dt).T)[:, 0]             # 815
     return {"drafts": out_ids[1:], "conf": conf, "margins": margins,
             "logits_base": logits_base, "markov_bias": np.stack(biases),
             "logits_final": logits, "markov_embed": np.stack(embeds),

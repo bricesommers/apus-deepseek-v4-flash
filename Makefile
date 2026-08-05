@@ -1,12 +1,34 @@
 # apus — root Makefile
 # Milestone M2: tokenizer (c/tok.h) + message encoding (c/encoding.h) + tests.
 
+UNAME   := $(shell uname)
+# M12a-1: clang on macOS, gcc on Linux/x86_64 (same warning set).
+ifeq ($(UNAME),Darwin)
 CC      := clang
+else
+CC      := gcc
+endif
 CFLAGS  ?= -std=c11 -O2 -Wall -Wextra
+ifneq ($(UNAME),Darwin)
+# Linux (M12a-1): under -std=c11 glibc hides pread/posix_memalign/strdup/
+# clock_gettime/posix_fadvise behind feature-test macros; _GNU_SOURCE
+# exposes them. -ffp-contract=off pins FP mul+add contraction off so the
+# scalar kernels' documented rounding sequences survive -O2 on any future
+# -march (x86-64 baseline has no FMA, so it is a no-op today).
+# -fno-tree-vectorize -fno-tree-slp-vectorize: works around a Rosetta
+# linux/amd64-emulation mistranslation of gcc -O2 auto-vectorized SSE2
+# code (test-m8 SIGTRAPs with "rosetta error: could not find free space
+# for allocation"; ASan/UBSan clean, macOS -O2 clean, -O1 clean).
+# Numerics are unaffected: FP reductions are never reassociated without
+# -ffast-math and elementwise loops are per-element identical either way,
+# so the scalar kernels produce the same bits with or without these flags.
+# M12a-2 (AVX2) hand-writes the vector kernels and can revisit this.
+CFLAGS  += -D_GNU_SOURCE -ffp-contract=off -fno-tree-vectorize -fno-tree-slp-vectorize
+endif
 LDLIBS  := -lm
 # M9b: Accelerate.framework (system vecLib/AMX BLAS) for the batch-M prefill
 # GEMM dispatch (c/blas.h). macOS system framework, ships with the OS.
-ifeq ($(shell uname),Darwin)
+ifeq ($(UNAME),Darwin)
 LDLIBS  += -framework Accelerate
 endif
 ASAN_CFLAGS := -std=c11 -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-omit-frame-pointer
@@ -21,6 +43,7 @@ BIN3 := $(M3)/bin
 M4A  := tests/m4a
 BIN4 := $(M4A)/bin
 
+M4B  := tests/m4b
 M4C  := tests/m4c
 BIN4C := $(M4C)/bin
 
@@ -57,7 +80,7 @@ M8_DEPS := $(M5_DEPS) c/mtp.h
 
 .PHONY: all test-m2 asan-m2 ubsan-m2 golden golden-exhaustive \
         test-m3 bench-m3 ubsan-m3 golden-m3 \
-        test-m4a ubsan-m4a golden-m4a test-m4c ubsan-m4c clean \
+        test-m4a ubsan-m4a golden-m4a golden-m4b test-m4c ubsan-m4c clean \
         test-m5 ubsan-m5 golden-m5 apus \
         test-m6a ubsan-m6a bench-m6a golden-m6a \
         test-m6b ubsan-m6b golden-m6b \
@@ -71,7 +94,8 @@ M8_DEPS := $(M5_DEPS) c/mtp.h
         test-m9b ubsan-m9b bench-m9b \
         test-m9c ubsan-m9c \
         test-m9d ubsan-m9d bench-m9d \
-        test-m9e ubsan-m9e bench-m9e
+        test-m9e ubsan-m9e bench-m9e \
+        test-m12a2 ubsan-m12a2 bench-m12a2
 
 all: $(BIN)/test_tok $(BIN)/test_encoding $(BIN3)/test_fp4 $(BIN3)/bench_fp4 \
      $(BIN4)/test_fp8 $(BIN4)/test_mhc
@@ -175,7 +199,8 @@ ubsan-m4a: $(BIN4)/test_fp8_ubsan $(BIN4)/test_mhc_ubsan golden-m4a
 	./$(BIN4)/test_mhc_ubsan
 
 # --- M4c: single-layer forward (c/st.h + c/attn.h + c/moe.h + c/layer.h) ---
-# Verified against the M4b golden fixtures (tests/m4b/fixtures, checked in).
+# Verified against the M4b golden fixtures (tests/m4b/fixtures, gitignored;
+# regenerate with golden-m4b — required from a clean checkout, e.g. CI).
 
 $(BIN4C):
 	mkdir -p $(BIN4C)
@@ -186,16 +211,19 @@ $(BIN4C)/test_layer: $(M4C)/test_layer.c $(M4C_DEPS) | $(BIN4C)
 $(BIN4C)/test_layer_ubsan: $(M4C)/test_layer.c $(M4C_DEPS) | $(BIN4C)
 	$(CC) -std=c11 -O1 -g -Wall -Wextra -fsanitize=undefined -fno-omit-frame-pointer -Ic -o $@ $< $(LDLIBS)
 
-test-m4c: $(BIN4C)/test_layer
+golden-m4b:
+	$(PY) $(M4B)/run_oracle.py
+
+test-m4c: $(BIN4C)/test_layer golden-m4b
 	./$(BIN4C)/test_layer
 
 # UBSan-only, like ubsan-m2/m3/m4a (Apple ASan runtime broken on this machine)
-ubsan-m4c: $(BIN4C)/test_layer_ubsan
+ubsan-m4c: $(BIN4C)/test_layer_ubsan golden-m4b
 	./$(BIN4C)/test_layer_ubsan
 
 # --- M5: full-model forward (c/model.h + c/sample.h + c/apus.c) ------------
 # Verified against the synthetic full mini-model fixtures (tests/m5/fixtures,
-# checked in; regenerate with golden-m5).
+# gitignored; regenerate with golden-m5 — a test-m5 dependency).
 
 $(BIN5):
 	mkdir -p $(BIN5)
@@ -209,11 +237,11 @@ $(BIN5)/test_full_ubsan: $(M5)/test_full.c $(M5_DEPS) | $(BIN5)
 golden-m5:
 	$(PY) $(M5)/gen_fixtures.py
 
-test-m5: $(BIN5)/test_full
+test-m5: $(BIN5)/test_full golden-m5
 	./$(BIN5)/test_full
 
 # UBSan-only, like the other milestones (Apple ASan runtime broken here)
-ubsan-m5: $(BIN5)/test_full_ubsan
+ubsan-m5: $(BIN5)/test_full_ubsan golden-m5
 	./$(BIN5)/test_full_ubsan
 
 # --- M6a: expert-store tiering (c/cache.h + c/st.h lazy path + c/compat.h) -
@@ -314,7 +342,10 @@ bin/apus: c/apus.c $(APUS_DEPS) | bin
 # Dense compute (FP8 attention/shared-expert linears, router gate, wo_a,
 # BF16 LM head) on the Apple GPU, FP32 shaders, zero-copy unified-memory
 # buffers. `make metal=1 apus` (or `make bin/apus_metal`). CPU stays the
-# default; bin/apus is behaviorally untouched.
+# default; bin/apus is behaviorally untouched. macOS-only (M12a-1: the
+# targets are stubbed with a clear error on Linux).
+
+ifeq ($(UNAME),Darwin)
 
 M7B    := tests/m7b
 BIN7B  := $(M7B)/bin
@@ -373,6 +404,13 @@ ubsan-m7b: $(BIN7B)/test_kernels_ubsan $(BIN7B)/test_model_ubsan $(BIN7B)/apus_m
 	./$(BIN7B)/test_model_ubsan
 	APUS_BIN=$(CURDIR)/$(BIN7B)/apus_metal_ubsan APUS_METAL=1 $(PY) $(M7A)/test_server.py
 
+else  # !Darwin: Metal is macOS-only (M12a-1)
+
+bin/apus_metal test-m7b bench-m7b ubsan-m7b:
+	@echo "error: the Metal backend (m7b) is macOS-only, not available on $(UNAME)" >&2; exit 1
+
+endif
+
 # --- M6c: decode threading (c/pool.h) + threaded/NEON kernels --------------
 # Pool correctness, thread-count independence (bitwise digests across
 # APUS_THREADS=1/4/8), bf16/f32 NEON reorder bounds, scratch arena.
@@ -420,7 +458,7 @@ $(BIN8)/test_m8_ubsan: $(M8)/test_m8.c $(M8_DEPS) | $(BIN8)
 golden-m8:
 	$(PY) $(M8)/gen_fixtures.py
 
-test-m8: $(BIN8)/test_m8
+test-m8: $(BIN8)/test_m8 golden-m8
 	APUS_THREADS=1 ./$(BIN8)/test_m8 > $(BIN8)/out_t1.txt
 	APUS_THREADS=4 ./$(BIN8)/test_m8 > $(BIN8)/out_t4.txt
 	APUS_THREADS=8 ./$(BIN8)/test_m8 > $(BIN8)/out_t8.txt
@@ -429,7 +467,7 @@ test-m8: $(BIN8)/test_m8
 	cat $(BIN8)/out_t4.txt
 
 # UBSan-only, like the other milestones (Apple ASan runtime broken here)
-ubsan-m8: $(BIN8)/test_m8_ubsan
+ubsan-m8: $(BIN8)/test_m8_ubsan golden-m8
 	APUS_THREADS=1 ./$(BIN8)/test_m8_ubsan > $(BIN8)/out_u1.txt
 	APUS_THREADS=4 ./$(BIN8)/test_m8_ubsan > $(BIN8)/out_u4.txt
 	diff $(BIN8)/out_u1.txt $(BIN8)/out_u4.txt
@@ -445,7 +483,7 @@ ubsan-m8: $(BIN8)/test_m8_ubsan
 golden-m11a:
 	$(PY) $(M11A)/gen_fixtures.py
 
-check-m11a:
+check-m11a: golden-m11a
 	$(PY) $(M11A)/check_oracle.py
 
 # --- M11b: DSpark speculative decoding in C (c/dspark.h) -------------------
@@ -469,7 +507,7 @@ $(BIN11B)/test_m11b: $(M11B)/test_m11b.c $(M11B_DEPS) | $(BIN11B)
 $(BIN11B)/test_m11b_ubsan: $(M11B)/test_m11b.c $(M11B_DEPS) | $(BIN11B)
 	$(CC) -std=c11 -O1 -g -Wall -Wextra -fsanitize=undefined -fno-omit-frame-pointer -Ic -o $@ $< $(LDLIBS) -lpthread
 
-test-m11b: $(BIN11B)/test_m11b
+test-m11b: $(BIN11B)/test_m11b golden-m11a
 	APUS_THREADS=1 ./$(BIN11B)/test_m11b > $(BIN11B)/out_t1.txt
 	APUS_THREADS=4 ./$(BIN11B)/test_m11b > $(BIN11B)/out_t4.txt
 	APUS_THREADS=8 ./$(BIN11B)/test_m11b > $(BIN11B)/out_t8.txt
@@ -478,7 +516,7 @@ test-m11b: $(BIN11B)/test_m11b
 	cat $(BIN11B)/out_t4.txt
 
 # UBSan-only, like the other milestones (Apple ASan runtime broken here)
-ubsan-m11b: $(BIN11B)/test_m11b_ubsan
+ubsan-m11b: $(BIN11B)/test_m11b_ubsan golden-m11a
 	APUS_THREADS=1 ./$(BIN11B)/test_m11b_ubsan > $(BIN11B)/out_u1.txt
 	APUS_THREADS=4 ./$(BIN11B)/test_m11b_ubsan > $(BIN11B)/out_u4.txt
 	diff $(BIN11B)/out_u1.txt $(BIN11B)/out_u4.txt
@@ -687,6 +725,47 @@ ubsan-m9e: $(BIN9E)/test_m9e_ubsan
 
 bench-m9e: $(BIN9E)/bench_m9e
 	./$(BIN9E)/bench_m9e
+
+# --- M12a-2: AVX2 x86 kernels (c/x86.h + dispatch in fp4/fp8/attn/model) ---
+# Bitwise-vs-scalar hard gates, exhaustive E4M3/FP4 expand proofs, FP64
+# truth (esc class), M-independence, the "AVX2 path taken" probe, and the
+# thread-count-independence digest (diffed across APUS_THREADS=1/4/8).
+# Off x86-64 the suite is a trivial pass (uniform target list).
+
+M12   := tests/m12
+BIN12 := $(M12)/bin
+M12_DEPS := $(M5_DEPS) c/blas.h c/sample.h c/x86.h
+
+$(BIN12):
+	mkdir -p $(BIN12)
+
+$(BIN12)/test_m12a2: $(M12)/test_m12a2.c $(M12_DEPS) | $(BIN12)
+	$(CC) $(CFLAGS) -Ic -o $@ $< $(LDLIBS) -lpthread
+
+$(BIN12)/test_m12a2_ubsan: $(M12)/test_m12a2.c $(M12_DEPS) | $(BIN12)
+	$(CC) -std=c11 -O1 -g -Wall -Wextra -fsanitize=undefined -fno-omit-frame-pointer -ffp-contract=off $(if $(filter-out Darwin,$(UNAME)),-D_GNU_SOURCE) -Ic -o $@ $< $(LDLIBS) -lpthread
+
+$(BIN12)/bench_m12a2: $(M12)/bench_m12a2.c $(M12_DEPS) | $(BIN12)
+	$(CC) $(CFLAGS) -Ic -o $@ $< $(LDLIBS) -lpthread
+
+test-m12a2: $(BIN12)/test_m12a2
+	APUS_THREADS=1 ./$(BIN12)/test_m12a2 > $(BIN12)/out_t1.txt
+	APUS_THREADS=4 ./$(BIN12)/test_m12a2 > $(BIN12)/out_t4.txt
+	APUS_THREADS=8 ./$(BIN12)/test_m12a2 > $(BIN12)/out_t8.txt
+	diff $(BIN12)/out_t1.txt $(BIN12)/out_t4.txt
+	diff $(BIN12)/out_t1.txt $(BIN12)/out_t8.txt
+	cat $(BIN12)/out_t4.txt
+
+# UBSan-only, like the other milestones (-ffp-contract=off pinned: the
+# sanitizer flags override CFLAGS, dropping the Linux default flags)
+ubsan-m12a2: $(BIN12)/test_m12a2_ubsan
+	APUS_THREADS=1 ./$(BIN12)/test_m12a2_ubsan > $(BIN12)/out_u1.txt
+	APUS_THREADS=4 ./$(BIN12)/test_m12a2_ubsan > $(BIN12)/out_u4.txt
+	diff $(BIN12)/out_u1.txt $(BIN12)/out_u4.txt
+	cat $(BIN12)/out_u4.txt
+
+bench-m12a2: $(BIN12)/bench_m12a2
+	./$(BIN12)/bench_m12a2
 
 clean:
 	rm -rf $(BIN) $(M2)/golden $(BIN3) $(M3)/golden $(BIN4) $(M4A)/golden $(BIN4C) $(BIN5) $(BIN6) $(M6A)/tmp $(BIN6B) $(M6B)/tmp $(M7A)/fixtures $(BIN7B) $(BIN9A) $(BIN9B) $(BIN11B) bin
