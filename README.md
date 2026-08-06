@@ -70,8 +70,8 @@ press Enter, wait for it to finish.
 Either clone it (if you have git):
 
 ```sh
-git clone https://github.com/bricesommers/apus.git
-cd apus
+git clone https://github.com/bricesommers/apus-deepseek-v4-flash.git
+cd apus-deepseek-v4-flash
 ```
 
 Or without git: click the green **Code** button on the GitHub page →
