@@ -146,6 +146,19 @@ jobs:
         shell: msys2 {0}
         run: make -s apus
 
+      - name: Diagnostics (binary exec probe)
+        shell: msys2 {0}
+        run: |
+          set -x
+          uname -a
+          echo "MSYSTEM=$MSYSTEM"
+          which gcc make sh python || true
+          ls -la bin/
+          ./bin/apus; echo "engine-exit=$?"
+          make -s tests/m6a/bin/test_store
+          ls -la tests/m6a/bin/
+          ./tests/m6a/bin/test_store; echo "store-exit=$?"
+
       - name: Portable battery (make targets)
         shell: msys2 {0}
         run: |
