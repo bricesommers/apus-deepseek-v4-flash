@@ -90,7 +90,8 @@ def main():
     manifest = []
     for name, text in cases.items():
         ids = enc(text)
-        with open(os.path.join(OUT, name + ".txt"), "w", encoding="utf-8") as f:
+        with open(os.path.join(OUT, name + ".txt"), "w", encoding="utf-8",
+              newline="") as f:
             f.write(text)
         write_ids(os.path.join(OUT, name + ".ids"), ids)
         with open(os.path.join(OUT, name + ".dec"), "wb") as f:
@@ -100,7 +101,7 @@ def main():
         manifest.append(name)
 
     # nosplit variants: special strings treated as plain text
-    tj = json.load(open(TOK_JSON))
+    tj = json.load(open(TOK_JSON, encoding="utf-8"))
     tj_plain = dict(tj)
     tj_plain["added_tokens"] = []
     tmp_path = os.path.join(OUT, "_tokenizer_plain.json")
@@ -112,7 +113,8 @@ def main():
         ids = tok_plain.encode(cases[name], add_special_tokens=False).ids
         write_ids(os.path.join(OUT, name + ".nosplit.ids"), ids)
 
-    with open(os.path.join(OUT, "tok_manifest.txt"), "w") as f:
+    with open(os.path.join(OUT, "tok_manifest.txt"), "w", encoding="utf-8",
+              newline="") as f:
         f.write("\n".join(manifest) + "\n")
 
     # ---- specials coverage: every added token id at least once ----
@@ -139,7 +141,7 @@ def main():
     tdir = os.path.join(ROOT, "reference-0731", "encoding", "tests")
     modes = {1: "thinking", 2: "thinking", 3: "thinking", 4: "chat"}
     for i in (1, 2, 3, 4):
-        td = json.load(open(os.path.join(tdir, f"test_input_{i}.json")))
+        td = json.load(open(os.path.join(tdir, f"test_input_{i}.json"), encoding="utf-8"))
         if isinstance(td, dict):
             messages = td["messages"]
             messages[0]["tools"] = td["tools"]
@@ -336,7 +338,8 @@ def main():
         prompt = encoding_dsv4.encode_messages(messages, **kwargs)
         with open(os.path.join(OUT, f"enc_extra_{i}.json"), "w") as f:
             json.dump(spec, f, ensure_ascii=False, indent=1)
-        with open(os.path.join(OUT, f"enc_extra_{i}.txt"), "w", encoding="utf-8") as f:
+        with open(os.path.join(OUT, f"enc_extra_{i}.txt"), "w", encoding="utf-8",
+              newline="") as f:
             f.write(prompt)
         write_ids(os.path.join(OUT, f"enc_extra_{i}.ids"), enc(prompt))
     print(f"encoding: 4 conformance pairs + {len(extras)} extra cases")
