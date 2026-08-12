@@ -39,7 +39,8 @@ class Engine:
             cmd.append("--tiered")
         self.proc = subprocess.Popen(
             cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=sys.stderr, text=True, bufsize=1)
+            stderr=sys.stderr, text=True, encoding="utf-8", errors="replace",
+            bufsize=1)
         self.next_id = 0
 
     def request(self, req):

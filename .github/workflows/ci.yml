@@ -110,6 +110,11 @@ jobs:
   windows:
     runs-on: windows-latest
     timeout-minutes: 90
+    env:
+      # Windows Python defaults to the cp1252 locale; the oracles/tools
+      # read UTF-8 JSON (tokenizer.json, conformance pairs). UTF-8 mode
+      # is the blanket fix (chat.py/server.py also pin utf-8 explicitly).
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v5
 

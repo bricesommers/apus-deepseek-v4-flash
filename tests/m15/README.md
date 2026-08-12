@@ -55,9 +55,14 @@ runner itself, so they are self-consistent by construction.
 ## Running on Windows (users)
 
 Everything happens in an MSYS2 UCRT64 shell
-(`pacman -S mingw-w64-ucrt64-gcc make`, then the README quickstart
+(`pacman -S mingw-w64-ucrt-x86_64-gcc make`, then the README quickstart
 commands work unchanged): `make apus`, `python tools/download.py ...`,
 `./bin/apus run --model weights/apus-0731 --tiered --prompt ...`. The
 Python tools (`server.py`, `chat.py`) are cross-platform. Metal is
 macOS-only; `--metal` is absent on Windows. `ubsan-*` targets are
 POSIX-only (MinGW has no sanitizer runtimes).
+
+**Locale note:** Windows Python defaults to the cp1252 text encoding. The
+user-facing tools pin UTF-8 explicitly, but if you run the test battery
+(the fixture oracles read UTF-8 JSON), set `PYTHONUTF8=1` first — the CI
+windows job does exactly this.
