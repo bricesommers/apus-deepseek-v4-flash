@@ -307,9 +307,10 @@ struct ApusStore {
 static uint64_t apus_clock_tick(ApusStore *st) { return ++st->clock; }
 
 static void *apus_slab_alloc(size_t n) {
-    void *p = NULL;
-    if (posix_memalign(&p, 4096, n)) return NULL;
-    return p;
+    /* M15: apus_aligned_alloc pairs with apus_aligned_free everywhere a
+     * slab buffer is released (Windows _aligned_malloc storage must not
+     * pass through free()). */
+    return apus_aligned_alloc(4096, n);
 }
 
 #define APUS_BUF_FREE_MAX 64   /* <= 64 slabs retained (~855 MB at 13.4 MB) */
@@ -336,7 +337,7 @@ static void apus_store_buf_put(ApusStore *st, uint8_t *b) {
     if (st->buf_free_n < st->buf_free_cap) {
         st->buf_free[st->buf_free_n++] = b;
     } else {
-        free(b);
+        apus_aligned_free(b);
     }
 }
 
@@ -592,7 +593,7 @@ int apus_store_save_usage(ApusStore *st) {
                         (unsigned long long)cnt[(size_t)l * st->E + e]);
     free(cnt);
     fflush(f);
-    fsync(fileno(f));
+    apus_sys_fsync(f);   /* M15: _commit on Windows */
     if (fclose(f)) { remove(tmp); return -1; }
     if (rename(tmp, st->usage_path)) { remove(tmp); return -1; }
     return 0;
@@ -954,7 +955,7 @@ void apus_store_rss_guard(ApusStore *st) {
             }
     uint64_t freed = 0;
     for (size_t i = 0; i < n && freed < excess; i++) {
-        free(ord[i]->buf);
+        apus_aligned_free(ord[i]->buf);
         ord[i]->buf = NULL;
         ord[i]->state = APUS_SLOT_EMPTY;   /* slot keeps eid/freq identity */
         freed += st->slab_bytes;

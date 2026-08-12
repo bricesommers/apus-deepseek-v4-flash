@@ -38,6 +38,10 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include <io.h>     /* _setmode (M15) */
+#include <fcntl.h>  /* _O_BINARY */
+#endif
 
 #include "model.h"
 #include "sample.h"
@@ -993,6 +997,12 @@ static int run_main(int argc, char **argv) {
 }
 
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    /* M15: MSVCRT defaults stdin/stdout to text mode (\n -> \r\n), which
+     * would corrupt the NDJSON serve protocol; force binary. */
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
     if (argc < 2) { usage(stderr); return 2; }
     if (!strcmp(argv[1], "run")) return run_main(argc, argv);
     if (!strcmp(argv[1], "serve")) return serve_main(argc, argv);

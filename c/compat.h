@@ -49,6 +49,136 @@ void apus_fadvise_dontneed(int fd, uint64_t off, uint64_t len);
 size_t apus_env_mb(const char *name, size_t def_mb);
 int    apus_env_int(const char *name, int def);
 
+/* --- M15: Windows port shims (static inline: no link dependencies) --------
+ * The engine's POSIX surface is small and funnels through these wrappers:
+ * thread-safe positioned reads (the expert store preads the same fd from
+ * several I/O workers), 64-bit file size, paired aligned alloc/free
+ * (_aligned_malloc storage must NOT pass through free()), and the online
+ * CPU count. Non-Windows builds map 1:1 onto the POSIX calls. */
+#ifdef _WIN32
+#include <io.h>
+#include <malloc.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#include <windows.h>
+#include <psapi.h>
+#else
+#include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#endif
+
+static inline int apus_ncpu(void) {
+#ifdef _WIN32
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    return si.dwNumberOfProcessors > 0 ? (int)si.dwNumberOfProcessors : 1;
+#else
+    long c = sysconf(_SC_NPROCESSORS_ONLN);
+    return c > 0 ? (int)c : 1;
+#endif
+}
+
+static inline void *apus_aligned_alloc(size_t align, size_t n) {
+#ifdef _WIN32
+    return _aligned_malloc(n, align);
+#else
+    void *p = NULL;
+    if (posix_memalign(&p, align, n)) return NULL;
+    return p;
+#endif
+}
+
+static inline void apus_aligned_free(void *p) {
+#ifdef _WIN32
+    _aligned_free(p);
+#else
+    free(p);
+#endif
+}
+
+/* Read-only open suitable for apus_sys_pread. Windows: an overlapped-
+ * capable handle (required for thread-safe positioned reads) wrapped in a
+ * CRT fd in binary mode. */
+static inline int apus_sys_open_ro(const char *path) {
+#ifdef _WIN32
+    HANDLE h = CreateFileA(path, GENERIC_READ,
+                           FILE_SHARE_READ | FILE_SHARE_DELETE, NULL,
+                           OPEN_EXISTING,
+                           FILE_FLAG_OVERLAPPED | FILE_FLAG_RANDOM_ACCESS,
+                           NULL);
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    int fd = _open_osfhandle((intptr_t)h, _O_RDONLY | _O_BINARY);
+    if (fd < 0) { CloseHandle(h); return -1; }
+    return fd;
+#else
+    return open(path, O_RDONLY);
+#endif
+}
+
+/* 64-bit-safe file size. */
+static inline int64_t apus_sys_fsize(int fd) {
+#ifdef _WIN32
+    struct _stati64 sb;
+    if (_fstati64(fd, &sb)) return -1;
+    return (int64_t)sb.st_size;
+#else
+    struct stat sb;
+    if (fstat(fd, &sb)) return -1;
+    return (int64_t)sb.st_size;
+#endif
+}
+
+/* fsync for the usage-history crash-safe write (c/cache.h). */
+static inline int apus_sys_fsync(FILE *f) {
+#ifdef _WIN32
+    return _commit(_fileno(f));
+#else
+    return fsync(fileno(f));
+#endif
+}
+
+/* pread semantics: positioned read that does not disturb the file pointer
+ * and is safe to call concurrently on the same fd. Windows: ReadFile with
+ * a per-call OVERLAPPED on the overlapped handle from apus_sys_open_ro,
+ * waited on synchronously; chunks capped at 1 GiB (DWORD count). Returns
+ * the byte count (short at EOF), -1 on error. */
+static inline int64_t apus_sys_pread(int fd, void *buf, size_t n,
+                                     uint64_t off) {
+#ifdef _WIN32
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    uint64_t done = 0;
+    while (done < n) {
+        DWORD want = (n - done > (size_t)1 << 30)
+                     ? (DWORD)((size_t)1 << 30) : (DWORD)(n - done);
+        OVERLAPPED ov;
+        memset(&ov, 0, sizeof ov);
+        uint64_t pos = off + done;
+        ov.Offset = (DWORD)(pos & 0xffffffffu);
+        ov.OffsetHigh = (DWORD)((pos >> 32) & 0xffffffffu);
+        DWORD got = 0;
+        if (!ReadFile(h, (char *)buf + done, want, &got, &ov)) {
+            DWORD e = GetLastError();
+            if (e == ERROR_HANDLE_EOF) break;
+            if (e != ERROR_IO_PENDING) return done ? (int64_t)done : -1;
+            if (!GetOverlappedResult(h, &ov, &got, TRUE)) {
+                if (GetLastError() == ERROR_HANDLE_EOF) break;
+                return done ? (int64_t)done : -1;
+            }
+        }
+        if (got == 0) break;
+        done += got;
+    }
+    return (int64_t)done;
+#else
+    return (int64_t)pread(fd, buf, n, (off_t)off);
+#endif
+}
+
 #ifdef __cplusplus
 }
 #endif
@@ -62,8 +192,10 @@ int    apus_env_int(const char *name, int def);
 #include <fcntl.h>
 #include <mach/mach.h>
 #else
-#include <sys/resource.h>
 #include <sys/time.h>
+#ifndef _WIN32
+#include <sys/resource.h>   /* getrusage fallback (POSIX only) */
+#endif
 #ifdef __linux__
 #include <stdio.h>      /* /proc/self/statm */
 #include <fcntl.h>      /* posix_fadvise */
@@ -93,6 +225,13 @@ uint64_t apus_rss_bytes(void) {
     struct rusage ru;
     if (getrusage(RUSAGE_SELF, &ru)) return 0;
     return (uint64_t)ru.ru_maxrss * 1024;   /* Linux: KiB; macOS: bytes */
+#elif defined(_WIN32)
+    /* Current working set — the mach resident_size / /proc statm analogue
+     * (psapi; the RSS guard in c/cache.h needs CURRENT, not peak). */
+    PROCESS_MEMORY_COUNTERS pmc;
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc))
+        return (uint64_t)pmc.WorkingSetSize;
+    return 0;
 #else
     struct rusage ru;
     if (getrusage(RUSAGE_SELF, &ru)) return 0;

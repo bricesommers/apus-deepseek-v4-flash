@@ -3,19 +3,36 @@
 
 UNAME   := $(shell uname)
 # M12a-1: clang on macOS, gcc on Linux/x86_64 (same warning set).
+# M15: Windows via MinGW-w64 gcc (MSYS2 UCRT64 shell: uname is MINGW64_NT-*
+# and OS=Windows_NT is always set). No MSVC support (C11 + GNU extensions).
+# Windows uses -std=gnu11 (not strict c11): MinGW hides strdup/clock_gettime
+# et al. behind __STRICT_ANSI__; gnu11 exposes them. FP semantics unchanged
+# (-ffp-contract=off stays pinned).
+ifeq ($(OS),Windows_NT)
+STD     := -std=gnu11
+else
+STD     := -std=c11
+endif
 ifeq ($(UNAME),Darwin)
 CC      := clang
 else
 CC      := gcc
 endif
-CFLAGS  ?= -std=c11 -O2 -Wall -Wextra
+CFLAGS  ?= $(STD) -O2 -Wall -Wextra
 # Pin FP mul+add contraction OFF on every platform: scalar kernels and the
 # in-test scalar references have documented two-rounding sequences, but
 # newer clangs (GitHub macos-latest) auto-contract loops to FMA where our
 # dev clang 17 did not — same flags, different bits (test-m6c f32 bitwise
 # gate). No-op where the compiler was not contracting anyway.
 CFLAGS  += -ffp-contract=off
-ifneq ($(UNAME),Darwin)
+ifeq ($(OS),Windows_NT)
+# M15: MinGW-w64. -D_GNU_SOURCE does not exist here; the POSIX surface is
+# shimmed in c/compat.h. The -fno-tree-vectorize pair below mirrors the
+# Linux flags (numerics no-op; keeps the x86 anchor builds consistent).
+# -lpsapi: GetProcessMemoryInfo (compat.h RSS). pthreads come from
+# winpthreads (MSYS2's mingw-w64 gcc), plain -lpthread.
+CFLAGS  += -fno-tree-vectorize -fno-tree-slp-vectorize
+else ifneq ($(UNAME),Darwin)
 # Linux (M12a-1): under -std=c11 glibc hides pread/posix_memalign/strdup/
 # clock_gettime/posix_fadvise behind feature-test macros; _GNU_SOURCE
 # exposes them.
@@ -30,6 +47,9 @@ ifneq ($(UNAME),Darwin)
 CFLAGS  += -D_GNU_SOURCE -fno-tree-vectorize -fno-tree-slp-vectorize
 endif
 LDLIBS  := -lm
+ifeq ($(OS),Windows_NT)
+LDLIBS  += -lpsapi
+endif
 # M9b: Accelerate.framework (system vecLib/AMX BLAS) for the batch-M prefill
 # GEMM dispatch (c/blas.h). macOS system framework, ships with the OS.
 ifeq ($(UNAME),Darwin)

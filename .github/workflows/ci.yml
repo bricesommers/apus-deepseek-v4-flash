@@ -11,12 +11,12 @@
 #   macos  — macos-latest (Apple Silicon, clang/NEON): same battery, plus
 #            the Metal GPU suite (test-m7b), which is macOS-only BY DESIGN
 #            (the Makefile guards the Metal targets with `ifeq (Darwin)`).
-#
-# There is deliberately NO Windows job: the engine does not build on
-# Windows yet — it relies on pthreads (c/pool.h) and POSIX file I/O
-# (pread, posix_fadvise, posix_memalign; c/compat.h shims cover macOS and
-# Linux only). A Windows port needs a thread-pool + file-I/O shim layer
-# first. See tests/m12/README.md (M12b section).
+#   windows — windows-latest (x86_64, MinGW-w64 gcc via MSYS2 UCRT64):
+#            the M15 Windows port. Same battery, minus ubsan-* (MinGW has
+#            no sanitizer runtimes) and test-m7b (Metal is macOS-only).
+#            Fixtures regenerate on-runner via a NATIVE Windows Python
+#            (setup-python; wheels install cleanly), invoked from the
+#            msys2 shell through the inherited Windows PATH.
 #
 # PY=python3 everywhere: the Makefile defaults to the local dev venv
 # (.venv/bin/python), which does not exist on a fresh runner.
@@ -106,3 +106,48 @@ jobs:
 
       - name: Metal GPU suite (macOS-only)
         run: make -s PY=.venv/bin/python metal=1 test-m7b
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          path-type: inherit   # keep the Windows PATH (native python below)
+          install: >-
+            mingw-w64-ucrt64-gcc
+            make
+
+      # Native Windows Python: pip wheels install cleanly (the MSYS2/mingw
+      # Python reports a platform tag wheels don't match). Used for the
+      # fixture-generating oracles via PY=python.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps
+        run: pip install "numpy>=1.26" "safetensors>=0.4" "tokenizers>=0.19"
+
+      - name: Build the engine (MinGW-w64)
+        shell: msys2 {0}
+        run: make -s apus
+
+      - name: Portable battery (make targets)
+        shell: msys2 {0}
+        run: |
+          set -e
+          for t in $BATTERY; do
+            echo "=== $t ==="
+            make -s PY=python "$t"
+          done
+
+      - name: Python suites (m1 converter, r1b comparators)
+        shell: msys2 {0}
+        run: |
+          python -m unittest discover -s tests/m1
+          python tests/r1b/test_compare.py
+          python tests/r1b/test_compare_api.py

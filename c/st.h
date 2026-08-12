@@ -159,6 +159,7 @@ uint64_t apus_st_lazy_read_bytes(const ApusStLazy *lz);
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "compat.h"   /* M15: apus_sys_open_ro/fsize/pread shims */
 #include "json.h"
 
 struct ApusSt {
@@ -209,16 +210,16 @@ static void apus_st_err(char *err, size_t cap, const char *msg, const char *arg)
 }
 
 ApusSt *apus_st_open(const char *path, char *err, size_t errcap) {
-    int fd = open(path, O_RDONLY);
+    int fd = apus_sys_open_ro(path);
     if (fd < 0) { apus_st_err(err, errcap, "st: cannot open %s", path); return NULL; }
-    struct stat sb;
-    if (fstat(fd, &sb)) {
+    int64_t fszi = apus_sys_fsize(fd);
+    if (fszi < 0) {
         close(fd); apus_st_err(err, errcap, "st: stat failed %s", path);
         return NULL;
     }
-    uint64_t fsz = (uint64_t)sb.st_size;
+    uint64_t fsz = (uint64_t)fszi;
     uint8_t h8[8];
-    if (fsz < 8 || pread(fd, h8, 8, 0) != 8) {
+    if (fsz < 8 || apus_sys_pread(fd, h8, 8, 0) != 8) {
         close(fd); apus_st_err(err, errcap, "st: %s too small", path);
         return NULL;
     }
@@ -229,7 +230,7 @@ ApusSt *apus_st_open(const char *path, char *err, size_t errcap) {
         return NULL;
     }
     char *hbuf = malloc((size_t)hlen);
-    if (!hbuf || pread(fd, hbuf, (size_t)hlen, 8) != (ssize_t)hlen) {
+    if (!hbuf || apus_sys_pread(fd, hbuf, (size_t)hlen, 8) != (int64_t)hlen) {
         free(hbuf); close(fd);
         apus_st_err(err, errcap, "st: header read failed %s", path);
         return NULL;
@@ -297,8 +298,8 @@ static const ApusStTensor *apus_st_materialize(const ApusSt *cst, int i) {
         if (!buf) return NULL;
         size_t done = 0;
         while (done < t->nbytes) {
-            ssize_t r = pread(st->fd, buf + done, t->nbytes - done,
-                              (off_t)(st->offs[i] + done));
+            int64_t r = apus_sys_pread(st->fd, buf + done, t->nbytes - done,
+                                       (uint64_t)(st->offs[i] + done));
             if (r <= 0) { free(buf); return NULL; }
             done += (size_t)r;
         }
@@ -487,10 +488,10 @@ int apus_st_set_deferred(const ApusStSet *set) {
 
 ApusStLazy *apus_st_lazy_open(const char *path, int nocache, char *err,
                               size_t errcap) {
-    int fd = open(path, O_RDONLY);
+    int fd = apus_sys_open_ro(path);
     if (fd < 0) { apus_st_err(err, errcap, "stlazy: cannot open %s", path); return NULL; }
     uint8_t h8[8];
-    if (pread(fd, h8, 8, 0) != 8) {
+    if (apus_sys_pread(fd, h8, 8, 0) != 8) {
         close(fd); apus_st_err(err, errcap, "stlazy: %s too small", path);
         return NULL;
     }
@@ -501,7 +502,7 @@ ApusStLazy *apus_st_lazy_open(const char *path, int nocache, char *err,
         return NULL;
     }
     char *hbuf = malloc((size_t)hlen);
-    if (!hbuf || pread(fd, hbuf, (size_t)hlen, 8) != (ssize_t)hlen) {
+    if (!hbuf || apus_sys_pread(fd, hbuf, (size_t)hlen, 8) != (int64_t)hlen) {
         free(hbuf); close(fd);
         apus_st_err(err, errcap, "stlazy: header read failed %s", path);
         return NULL;
@@ -517,7 +518,7 @@ ApusStLazy *apus_st_lazy_open(const char *path, int nocache, char *err,
     lz->fd = fd;
     lz->fd_nc = -1;
     if (nocache) {
-        lz->fd_nc = open(path, O_RDONLY);
+        lz->fd_nc = apus_sys_open_ro(path);
 #ifdef __APPLE__
         if (lz->fd_nc >= 0 && fcntl(lz->fd_nc, F_NOCACHE, 1)) {
 #else
@@ -581,8 +582,8 @@ int apus_st_lazy_pread(ApusStLazy *lz, uint64_t file_off, void *dst,
     uint8_t *p = dst;
     size_t done = 0;
     while (done < nbytes) {
-        ssize_t r = pread(fd, p + done, nbytes - done,
-                          (off_t)(file_off + done));
+        int64_t r = apus_sys_pread(fd, p + done, nbytes - done,
+                                   file_off + done);
         if (r < 0) return -1;
         if (r == 0) return -1;             /* short file */
         done += (size_t)r;

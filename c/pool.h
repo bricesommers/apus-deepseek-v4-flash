@@ -36,10 +36,12 @@
 
 #include <pthread.h>
 
+#include "compat.h"     /* apus_ncpu, apus_aligned_alloc/free (M15) */
+
 #ifdef __APPLE__
 #include <sys/sysctl.h>
 #else
-#include <unistd.h>     /* sysconf(_SC_NPROCESSORS_ONLN) */
+#include <unistd.h>     /* sysconf(_SC_NPROCESSORS_ONLN) — via compat.h */
 #endif
 
 #ifdef __cplusplus
@@ -77,8 +79,7 @@ static inline int apus_pool_default_threads(void) {
             n = 1;
     }
 #else
-    long c = sysconf(_SC_NPROCESSORS_ONLN);
-    n = c > 0 ? (int)c : 1;
+    n = apus_ncpu();   /* sysconf on POSIX, GetSystemInfo on Windows (M15) */
 #endif
     return n;
 }
@@ -219,7 +220,7 @@ static inline void *apus_scratch_alloc(size_t bytes) {
             size_t cap = sc->cur > 0 ? 2 * sc->cap[sc->cur - 1]
                                      : (size_t)1 << 16;
             while (cap < bytes) cap *= 2;
-            sc->seg[sc->cur] = aligned_alloc(64, cap);
+            sc->seg[sc->cur] = apus_aligned_alloc(64, cap);
             if (!sc->seg[sc->cur]) { sc->cur--; return NULL; }
             sc->cap[sc->cur] = cap;
             sc->nseg = sc->cur + 1;
@@ -231,8 +232,8 @@ static inline void *apus_scratch_alloc(size_t bytes) {
              * segfault at APUS_THREADS=1). */
             size_t cap = sc->cap[sc->cur];
             while (cap < bytes) cap *= 2;
-            free(sc->seg[sc->cur]);
-            sc->seg[sc->cur] = malloc(cap);
+            apus_aligned_free(sc->seg[sc->cur]);   /* pairs with the alloc */
+            sc->seg[sc->cur] = apus_aligned_alloc(64, cap);
             if (!sc->seg[sc->cur]) { sc->cap[sc->cur] = 0; sc->cur--; return NULL; }
             sc->cap[sc->cur] = cap;
         }
