@@ -170,7 +170,7 @@ int main(void) {
     /* pins enabled: pins change residency, never numerics. Seed the pin
      * store from a synthetic usage-history file. */
     {
-        (void)system("mkdir -p tests/m6a/tmp");
+        (void)apus_sys_mkdir_p("tests/m6a/tmp");   /* M15 */
         FILE *uf = fopen("tests/m6a/tmp/usage_invariance.txt", "w");
         for (int l = 0; l < 6; l++)
             fprintf(uf, "%d %d %d\n", l, (l * 7) % 64, 900 - l);

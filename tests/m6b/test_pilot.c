@@ -376,7 +376,7 @@ static int read_usage_count(const char *path, int want_l, int want_e) {
 
 static void test_heat_decay(void) {
     char err[256];
-    (void)system("mkdir -p " TMP);
+    (void)apus_sys_mkdir_p(TMP);   /* M15 */
     const char *up = TMP "/usage_decay.txt";
     FILE *f = fopen(up, "w");
     fprintf(f, "0 5 100\n0 6 50\n1 7 33\n");

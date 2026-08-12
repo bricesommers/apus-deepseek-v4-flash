@@ -160,7 +160,7 @@ static void slow_claim(ApusStore *st, int layer, int32_t eid, uint64_t gen) {
 
 static void test_boost(void) {
     char err[256];
-    (void)system("mkdir -p " TMP);
+    (void)apus_sys_mkdir_p(TMP);   /* M15 */
     ApusStoreCfg sc = {0};
     sc.n_layers = 6;
     sc.n_experts = 64;

@@ -425,7 +425,7 @@ static void test_hint_guard(void) {
 
 int main(void) {
     printf("test_store: M6a expert-store unit tests\n");
-    (void)system("mkdir -p " TMP);
+    (void)apus_sys_mkdir_p(TMP);   /* M15: portable (no cmd.exe) */
     test_slab_and_reads();
     test_promotion();
     test_recency();

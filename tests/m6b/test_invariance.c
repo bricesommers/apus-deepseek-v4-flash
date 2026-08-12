@@ -200,7 +200,7 @@ int main(void) {
 
     /* pins + usage history with the pilot on */
     {
-        (void)system("mkdir -p tests/m6b/tmp");
+        (void)apus_sys_mkdir_p("tests/m6b/tmp");   /* M15 */
         FILE *uf = fopen("tests/m6b/tmp/usage_invariance.txt", "w");
         for (int l = 0; l < 6; l++)
             fprintf(uf, "%d %d %d\n", l, (l * 7) % 64, 900 - l);

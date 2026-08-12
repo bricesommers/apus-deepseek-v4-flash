@@ -60,12 +60,17 @@ int    apus_env_int(const char *name, int def);
 #include <malloc.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <string.h>
+#include <errno.h>
+#include <direct.h>
 #include <sys/stat.h>
 #include <windows.h>
 #include <psapi.h>
 #else
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
+#include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -138,6 +143,31 @@ static inline int apus_sys_fsync(FILE *f) {
     return _commit(_fileno(f));
 #else
     return fsync(fileno(f));
+#endif
+}
+
+/* mkdir -p (test fixture dirs). 0 on success or already-exists. */
+static inline int apus_sys_mkdir_p(const char *path) {
+    char tmp[1024];
+    size_t n = strlen(path);
+    if (n == 0 || n >= sizeof tmp) return -1;
+    memcpy(tmp, path, n + 1);
+    for (char *p = tmp + 1; *p; p++) {
+        if (*p == '/' || *p == '\\') {
+            char c = *p;
+            *p = 0;
+#ifdef _WIN32
+            (void)_mkdir(tmp);
+#else
+            (void)mkdir(tmp, 0777);
+#endif
+            *p = c;
+        }
+    }
+#ifdef _WIN32
+    return _mkdir(tmp) == 0 || errno == EEXIST ? 0 : -1;
+#else
+    return mkdir(tmp, 0777) == 0 || errno == EEXIST ? 0 : -1;
 #endif
 }
 
