@@ -116,7 +116,7 @@ jobs:
       - uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
-          update: false
+          update: true   # required: pacman needs a synced package db
           path-type: inherit   # keep the Windows PATH (native python below)
           install: >-
             mingw-w64-ucrt64-gcc
