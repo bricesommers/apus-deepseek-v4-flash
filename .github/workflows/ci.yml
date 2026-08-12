@@ -151,14 +151,15 @@ jobs:
         run: |
           set +e   # the msys2 CI shell defaults to errexit; we WANT the codes
           set -x
-          uname -a
-          echo "MSYSTEM=$MSYSTEM OS=$OS"
-          ls -la bin/
-          ./bin/apus; echo "engine-exit=$?"
           make -s tests/m6a/bin/test_store; echo "build-exit=$?"
           ls -la tests/m6a/bin/
-          ./tests/m6a/bin/test_store; echo "store-exit=$?"
-          ldd tests/m6a/bin/test_store.exe || true
+          ./tests/m6a/bin/test_store; echo "bash-noext-exit=$?"
+          ./tests/m6a/bin/test_store.exe; echo "bash-exe-exit=$?"
+          printf 'x:\n\t./tests/m6a/bin/test_store\n' > mk1.mk
+          make -f mk1.mk x; echo "make-noext-exit=$?"
+          printf 'y:\n\t./tests/m6a/bin/test_store.exe\n' > mk2.mk
+          make -f mk2.mk y; echo "make-exe-exit=$?"
+          rm -f mk1.mk mk2.mk
 
       - name: Portable battery (make targets)
         shell: msys2 {0}
