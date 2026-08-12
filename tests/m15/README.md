@@ -38,9 +38,9 @@ so no Makefile binary paths changed.
   (warnings only where x86 already had them: NEON-gated helpers unused).
 - macOS + Linux batteries after the port edits: green, digests identical
   to pre-M15 (the shims are 1:1 wrappers on POSIX).
-- Windows CI evidence: see docs/STATUS.md (M15 entry) — full battery on
-  windows-latest (msys2 UCRT64 gcc), fixtures regenerated on-runner with a
-  native Windows Python.
+- Windows CI: the full battery runs on windows-latest (MSYS2 UCRT64
+  gcc) in the `windows` job of `.github/workflows/ci.yml`, with fixtures
+  regenerated on-runner via a native Windows Python.
 
 ## Numerics note (expected, documented)
 

@@ -1,7 +1,7 @@
 # .github/workflows/ci.yml — apus CI: full portable test battery.
 #
-# Triggers: every push to `main` (the public snapshot branch is pushed AS
-# main — see docs/RELEASE.md) plus manual workflow_dispatch.
+# Triggers: every push to `main` (the public snapshot branch is pushed
+# AS main) plus manual workflow_dispatch.
 #
 # Jobs:
 #   linux  — ubuntu-latest (x86_64, gcc): engine build + the full portable

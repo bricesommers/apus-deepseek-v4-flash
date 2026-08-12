@@ -250,7 +250,7 @@ Reimplement / parametrize for V4-Flash:
 ```
 apus/
 ├── Makefile                     # clang -O3, -lm -lpthread only; OpenMP opt-in
-├── docs/{ARCHITECTURE.md, STATUS.md}
+├── docs/                        # ARCHITECTURE.md (this file) + design notes
 ├── reference/                   # small spec files from the HF repo (config,
 │                                #   tokenizer.json, encoding/, inference/*.py)
 ├── c/

@@ -74,8 +74,9 @@ spec-equivalence gates are preserved by construction.
 (The bench entry points are `noinline` — identical-input reps were being
 CSE'd away, the same trap the m9a bench avoids with function pointers.)
 
-Real-model walls and the 24-token token-identity proof are recorded in
-docs/STATUS.md (M14 entry).
+Real-model validation (dev M1 Pro): prefill-512 60.7 → 52.0 s
+(8.4 → 9.8 tok/s); a 24-token greedy smoke was byte-identical pre vs
+post.
 
 ## Honest scope note
 

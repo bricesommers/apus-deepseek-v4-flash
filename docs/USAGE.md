@@ -69,7 +69,9 @@ curl http://localhost:8080/v1/chat/completions -H 'Content-Type: application/jso
 | `APUS_PILOT_K` | 8 | prefetch depth (measured optimum) |
 | `APUS_METAL=1` | off | GPU dense offload (needs `bin/apus_metal`) |
 
-If numbers look off, compare with the baselines in `docs/STATUS.md`.
+If numbers look far off (dev-class reference: ~0.3–1.1 tok/s decode,
+~8–10 tok/s prefill at 512 tokens on a 32 GB M1 Pro), check free RAM
+first — it is the dominant variable.
 
 ## Note: weights on an external drive
 
