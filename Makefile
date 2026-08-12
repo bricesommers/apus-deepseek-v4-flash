@@ -48,7 +48,11 @@ CFLAGS  += -D_GNU_SOURCE -fno-tree-vectorize -fno-tree-slp-vectorize
 endif
 LDLIBS  := -lm
 ifeq ($(OS),Windows_NT)
-LDLIBS  += -lpsapi
+# -lpsapi: GetProcessMemoryInfo (compat.h RSS). -static: bundle
+# winpthreads/mingw runtime — a MinGW .exe otherwise needs
+# libwinpthread-1.dll on PATH (silent exit 127 when missing), and static
+# linking makes the binaries portable for end users anyway.
+LDLIBS  += -lpsapi -static
 endif
 # M9b: Accelerate.framework (system vecLib/AMX BLAS) for the batch-M prefill
 # GEMM dispatch (c/blas.h). macOS system framework, ships with the OS.
