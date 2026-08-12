@@ -1204,10 +1204,15 @@ void apus_store_close(ApusStore *st) {
     if (st->lc) {
         for (int l = 0; l < st->n_layers; l++) {
             ApusLayerCache *lc = &st->lc[l];
-            for (int i = 0; i < lc->n_slots; i++) free(lc->slots[i].buf);
-            for (int i = 0; i < lc->n_pins; i++) free(lc->pins[i].buf);
+            /* slot/pin/wait-slot buffers all trace back to
+             * apus_store_buf_get → apus_aligned_alloc — they MUST go to
+             * apus_aligned_free (Windows _aligned_malloc storage aborts
+             * the heap in plain free(); POSIX never noticed because
+             * posix_memalign storage is free()-legal). */
+            for (int i = 0; i < lc->n_slots; i++) apus_aligned_free(lc->slots[i].buf);
+            for (int i = 0; i < lc->n_pins; i++) apus_aligned_free(lc->pins[i].buf);
             for (int i = 0; i < lc->ws_n; i++) {
-                free(lc->ws[i]->buf);
+                apus_aligned_free(lc->ws[i]->buf);
                 free(lc->ws[i]);
             }
             free(lc->slots);
@@ -1222,7 +1227,7 @@ void apus_store_close(ApusStore *st) {
     }
     free(st->shards);
     free(st->recs);
-    for (int i = 0; i < st->buf_free_n; i++) free(st->buf_free[i]);
+    for (int i = 0; i < st->buf_free_n; i++) apus_aligned_free(st->buf_free[i]);
     free(st->buf_free);
     pthread_mutex_destroy(&st->mu);
     pthread_cond_destroy(&st->cv);
