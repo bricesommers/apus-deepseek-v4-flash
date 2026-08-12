@@ -151,15 +151,10 @@ jobs:
         run: |
           set +e   # the msys2 CI shell defaults to errexit; we WANT the codes
           set -x
-          make -s tests/m6a/bin/test_store; echo "build-exit=$?"
-          ls -la tests/m6a/bin/
-          ./tests/m6a/bin/test_store; echo "bash-noext-exit=$?"
-          ./tests/m6a/bin/test_store.exe; echo "bash-exe-exit=$?"
-          printf 'x:\n\t./tests/m6a/bin/test_store\n' > mk1.mk
-          make -f mk1.mk x; echo "make-noext-exit=$?"
-          printf 'y:\n\t./tests/m6a/bin/test_store.exe\n' > mk2.mk
-          make -f mk2.mk y; echo "make-exe-exit=$?"
-          rm -f mk1.mk mk2.mk
+          make -s PY=python golden-m6a; echo "golden-exit=$?"
+          make -s tests/m6a/bin/test_store tests/m6a/bin/test_invariance
+          ./tests/m6a/bin/test_store; echo "direct-with-fixtures-exit=$?"
+          make -s PY=python test-m6a; echo "full-make-exit=$?"
 
       - name: Portable battery (make targets)
         shell: msys2 {0}
