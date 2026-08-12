@@ -146,6 +146,17 @@ static inline int apus_sys_fsync(FILE *f) {
 #endif
 }
 
+/* rename(2) with POSIX replace semantics: POSIX rename() atomically
+ * replaces an existing destination; Windows rename() fails with EEXIST.
+ * MoveFileExA + MOVEFILE_REPLACE_EXISTING keeps the same atomicity. */
+static inline int apus_sys_rename(const char *from, const char *to) {
+#ifdef _WIN32
+    return MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING) ? 0 : -1;
+#else
+    return rename(from, to);
+#endif
+}
+
 /* mkdir -p (test fixture dirs). 0 on success or already-exists. */
 static inline int apus_sys_mkdir_p(const char *path) {
     char tmp[1024];

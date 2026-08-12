@@ -595,7 +595,7 @@ int apus_store_save_usage(ApusStore *st) {
     fflush(f);
     apus_sys_fsync(f);   /* M15: _commit on Windows */
     if (fclose(f)) { remove(tmp); return -1; }
-    if (rename(tmp, st->usage_path)) { remove(tmp); return -1; }
+    if (apus_sys_rename(tmp, st->usage_path)) { remove(tmp); return -1; }
     return 0;
 }
 

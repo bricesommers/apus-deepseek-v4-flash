@@ -59,8 +59,12 @@ static int g_fails;
 } while (0)
 
 static void pilot_drain(ApusPilot *p) {
-    struct timespec ts = {0, 100000};
-    for (int i = 0; i < 200000; i++) {
+    /* 1 ms polls: the same ~20 s wall-clock budget as before, but immune
+     * to platforms whose nanosleep rounds sub-ms requests down to ~0
+     * (Windows) — a fast-spinning drain would otherwise give up while
+     * the consumer is simply a few ms behind. */
+    struct timespec ts = {0, 1000000};
+    for (int i = 0; i < 20000; i++) {
         ApusPilotStats s;
         apus_pilot_stats(p, &s);
         if (s.hints_issued + s.hints_dropped_stale >= s.hints_enqueued)
