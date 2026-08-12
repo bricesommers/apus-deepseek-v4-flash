@@ -116,11 +116,15 @@ jobs:
       - uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
-          update: true   # required: pacman needs a synced package db
+          # update:false — a full MSYS2 system upgrade kills its own shell
+          # mid-run on GH runners ("Killing remaining tasks") and is flaky;
+          # we only need a pacman db sync, done in the next step.
+          update: false
           path-type: inherit   # keep the Windows PATH (native python below)
-          install: >-
-            mingw-w64-ucrt64-gcc
-            make
+
+      - name: Install MinGW toolchain
+        shell: msys2 {0}
+        run: pacman -Sy --noconfirm --needed mingw-w64-ucrt64-gcc make
 
       # Native Windows Python: pip wheels install cleanly (the MSYS2/mingw
       # Python reports a platform tag wheels don't match). Used for the
