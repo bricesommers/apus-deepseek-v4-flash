@@ -40,9 +40,10 @@ logic with fabricated goldens.
 
 import argparse
 import json
-import select
+import queue
 import subprocess
 import sys
+import threading
 import time
 
 NEAR_TIE_DEFAULT = 0.5
@@ -138,14 +139,25 @@ class ApusServe:
             text=True, bufsize=1)
         self.timeout = timeout
         self._req = 0
+        # Read-with-timeout via a daemon pump thread: select() on a pipe is
+        # POSIX-only (Windows select is sockets-only → WinError 10038), and
+        # a plain readline() has no timeout anywhere. The queue gives the
+        # same semantics on every platform; None is the EOF sentinel.
+        self._lines = queue.Queue()
+        self._pump_thread = threading.Thread(target=self._pump, daemon=True)
+        self._pump_thread.start()
+
+    def _pump(self):
+        for line in self.proc.stdout:
+            self._lines.put(line)
+        self._lines.put(None)
 
     def _read_msg(self):
-        fd = self.proc.stdout.fileno()
-        r, _, _ = select.select([fd], [], [], self.timeout)
-        if not r:
+        try:
+            line = self._lines.get(timeout=self.timeout)
+        except queue.Empty:
             raise TimeoutError(f"apus serve: no output for {self.timeout}s")
-        line = self.proc.stdout.readline()
-        if not line:
+        if line is None:
             raise RuntimeError("apus serve: EOF on stdout (engine died?)")
         return json.loads(line)
 
