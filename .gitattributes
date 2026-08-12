@@ -1,0 +1,5 @@
+# apus is byte-exact everywhere: golden fixtures, conformance pairs, and
+# tokenizer data are compared bitwise by the C tests. Never let git
+# translate line endings (Windows autocrlf broke the m2 conformance
+# pairs on checkout — M15).
+* -text
