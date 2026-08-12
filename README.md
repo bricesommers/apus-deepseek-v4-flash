@@ -38,16 +38,19 @@ first, throughput second.
   hosted on DeepSeek's API side-by-side: zero contradictions, zero factual
   errors across the test battery (see `docs/R1B-RESULTS.md`).
 - **Portable** — builds and passes the full test battery on macOS/ARM
-  (clang, NEON, optional Metal) and Linux/x86_64 (gcc, AVX2 kernels with
-  scalar fallbacks; libc + pthreads only, no BLAS dependency).
+  (clang, NEON, optional Metal), Linux/x86_64 (gcc, AVX2 kernels with
+  scalar fallbacks; libc + pthreads only, no BLAS dependency), and
+  Windows/x86_64 (MinGW-w64 gcc via MSYS2 UCRT64; the POSIX surface is
+  shimmed in `c/compat.h`).
 
 ## Requirements
 
 - **macOS/Apple Silicon** (M1 or later) with Xcode command line tools, or
   **Linux/x86_64** with gcc and make (AVX2 auto-detected; scalar fallback
-  otherwise). **Windows: not natively** (the engine uses POSIX threads and
-  file I/O) — use WSL2 and follow the Linux path; untested there, reports
-  welcome.
+  otherwise), or **Windows 10/11 x86_64** with
+  [MSYS2](https://www.msys2.org/) — from the **UCRT64** shell:
+  `pacman -S mingw-w64-ucrt-x86_64-gcc make`, then the same build/run
+  commands as Linux. (WSL2 also works: follow the Linux path inside it.)
 - **≥ 16 GB unified memory** (32 GB recommended; the tiered store trades
   speed for memory headroom)
 - **~180 GB free disk** (weights container + one source shard during
@@ -56,10 +59,11 @@ first, throughput second.
 
 ## Quickstart (step by step, no experience needed)
 
-You need: a Mac with Apple Silicon (M1 or later) **or** a Linux PC — and
-about **180 GB of free disk space** for the model. Windows users: install
-WSL2 first (`wsl --install` in PowerShell), then follow the Linux steps
-inside it.
+You need: a Mac with Apple Silicon (M1 or later), a Linux PC, **or** a
+Windows PC — and about **180 GB of free disk space** for the model.
+Windows users: install [MSYS2](https://www.msys2.org/), open the
+**UCRT64** shell, run `pacman -S mingw-w64-ucrt-x86_64-gcc make`, and
+follow the Linux steps below from that shell (WSL2 works too).
 
 Every grey box below is a command to paste into your terminal (on Mac:
 open **Terminal** from Applications → Utilities). Paste one box at a time,
@@ -223,9 +227,10 @@ tools/docker/test-linux.sh test-m3 test-m4c   # selected targets
 ## CI
 
 GitHub Actions (`.github/workflows/ci.yml`) runs the full battery on every
-push to `main`: a `linux` job (ubuntu-latest, gcc/x86_64) and a `macos`
-job (macos-latest, clang/NEON + the Metal suite). There is no Windows job
-yet — the engine uses pthreads and POSIX file I/O throughout.
+push to `main`: a `linux` job (ubuntu-latest, gcc/x86_64), a `macos` job
+(macos-latest, clang/NEON + the Metal suite), and a `windows` job
+(windows-latest, MinGW-w64 gcc via MSYS2 UCRT64 — same battery minus the
+sanitizer twins and Metal, which is macOS-only).
 
 ## Repository layout
 

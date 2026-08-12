@@ -40,7 +40,28 @@ so no Makefile binary paths changed.
   to pre-M15 (the shims are 1:1 wrappers on POSIX).
 - Windows CI: the full battery runs on windows-latest (MSYS2 UCRT64
   gcc) in the `windows` job of `.github/workflows/ci.yml`, with fixtures
-  regenerated on-runner via a native Windows Python.
+  regenerated on-runner via a native Windows Python. **GREEN 2026-08-12**
+  (CI run 31635225065): test-m2…test-m14 + all three Python suites,
+  alongside green linux + macos jobs.
+
+## Windows-only bugs this milestone caught (all fixed)
+
+CI on the real Windows runtime found three bugs that are invisible on
+POSIX — kept here so they are not reintroduced:
+
+1. `apus_store_close` freed `apus_aligned_alloc` slab buffers with plain
+   `free()` — `_aligned_malloc` storage must go to `_aligned_free`
+   (posix_memalign storage is free()-legal, so macOS/Linux never
+   noticed). Presented as a silent exit 127 with zero output.
+2. The M6b usage save used `rename()` for atomic replace; Windows
+   rename() fails when the destination exists. Now `apus_sys_rename`
+   (MoveFileExA + MOVEFILE_REPLACE_EXISTING) in `c/compat.h`.
+3. The r1/r1b serve harnesses did `select()` on the engine's stdout
+   pipe; Windows select is sockets-only (WinError 10038). Now a daemon
+   pump thread + `queue.Queue` with `get(timeout=)`.
+
+Plus one test-harness fix: `pilot_drain` in `tests/m6b/test_pilot.c`
+polls at 1 ms (Windows rounds sub-ms nanosleep to ~0).
 
 ## Numerics note (expected, documented)
 
