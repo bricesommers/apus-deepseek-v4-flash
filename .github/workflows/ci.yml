@@ -151,13 +151,16 @@ jobs:
         run: |
           set +e   # the msys2 CI shell defaults to errexit; we WANT the codes
           set -x
-          pacman -Sy --noconfirm --needed mingw-w64-ucrt-x86_64-gdb
-          make -s PY=python golden-m6a
+          # Fixtures FIRST, with the native Windows python: the gdb install
+          # below drags in a mingw python 3.14 (no numpy) that shadows it.
+          make -s PY=python golden-m6a && echo golden-ok
+          mkdir -p tests/m6a/bin
           gcc -std=gnu11 -O0 -g -Wall -Wextra -ffp-contract=off \
             -fno-tree-vectorize -fno-tree-slp-vectorize -Ic \
             -o tests/m6a/bin/test_store_dbg tests/m6a/test_store.c \
-            -lm -lpsapi -lpthread -static
+            -lm -lpsapi -lpthread -static && echo build-ok
           ./tests/m6a/bin/test_store_dbg; echo "direct-exit=$?"
+          pacman -Sy --noconfirm --needed mingw-w64-ucrt-x86_64-gdb
           gdb -batch -ex run -ex bt -ex "info registers rip" \
             --args ./tests/m6a/bin/test_store_dbg
 
