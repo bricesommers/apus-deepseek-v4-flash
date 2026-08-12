@@ -151,10 +151,15 @@ jobs:
         run: |
           set +e   # the msys2 CI shell defaults to errexit; we WANT the codes
           set -x
-          make -s PY=python golden-m6a; echo "golden-exit=$?"
-          make -s tests/m6a/bin/test_store tests/m6a/bin/test_invariance
-          ./tests/m6a/bin/test_store; echo "direct-with-fixtures-exit=$?"
-          make -s PY=python test-m6a; echo "full-make-exit=$?"
+          pacman -Sy --noconfirm --needed mingw-w64-ucrt-x86_64-gdb
+          make -s PY=python golden-m6a
+          gcc -std=gnu11 -O0 -g -Wall -Wextra -ffp-contract=off \
+            -fno-tree-vectorize -fno-tree-slp-vectorize -Ic \
+            -o tests/m6a/bin/test_store_dbg tests/m6a/test_store.c \
+            -lm -lpsapi -lpthread -static
+          ./tests/m6a/bin/test_store_dbg; echo "direct-exit=$?"
+          gdb -batch -ex run -ex bt -ex "info registers rip" \
+            --args ./tests/m6a/bin/test_store_dbg
 
       - name: Portable battery (make targets)
         shell: msys2 {0}
