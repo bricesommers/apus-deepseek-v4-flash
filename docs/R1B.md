@@ -66,7 +66,7 @@ R1 GPU plan in `docs/R1.md` remains available.
 2. In the shell where you run the tool:
 
    ```bash
-   export OPENROUTER_API_KEY="<your OpenRouter API key>"
+   export OPENROUTER_API_KEY="sk-or-..."
    ```
 
    The tool reads only this environment variable. It is sent as the
@@ -102,7 +102,7 @@ Sanity first (no key needed, no API calls):
 Then the real thing:
 
 ```bash
-export OPENROUTER_API_KEY="<your OpenRouter API key>"
+export OPENROUTER_API_KEY="sk-or-..."
 .venv/bin/python tools/r1b/compare_api.py --model deepseek/<the-0731-id>
 ```
 

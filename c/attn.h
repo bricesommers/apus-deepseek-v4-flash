@@ -464,6 +464,41 @@ static inline float apus_dot_f32_scalar(const float *a, const float *b,
     return dot;
 }
 
+#ifdef __ARM_NEON
+/* M14: FOUR independent sequential-order dots at once — the NEON mirror of
+ * apus_dot4_f32_x86 (c/x86.h). The vmulq_f32 products are the exact IEEE
+ * multiplies (bitwise identical to the scalar fmul), staged to stack; the
+ * adds run as four interleaved scalar chains in STRICT k order, so each dot
+ * is bitwise identical to apus_dot_f32_scalar — only the FP-add latency is
+ * hidden, no rounding sequence changes. The accumulators and row pointers
+ * are NAMED variables, not arrays: indexed acc[]/a[] spills to memory in
+ * the inner loop (the Rosetta lesson, tests/m12/README.md). */
+static inline void apus_dot4_f32_neon(const float *const a[4],
+                                      const float *const b[4],
+                                      size_t n, float out[4]) {
+    const float *a0 = a[0], *a1 = a[1], *a2 = a[2], *a3 = a[3];
+    const float *b0 = b[0], *b1 = b[1], *b2 = b[2], *b3 = b[3];
+    float p0[4], p1[4], p2[4], p3[4];
+    float d0 = 0.0f, d1 = 0.0f, d2 = 0.0f, d3 = 0.0f;
+    size_t k = 0;
+    for (; k + 4 <= n; k += 4) {
+        vst1q_f32(p0, vmulq_f32(vld1q_f32(a0 + k), vld1q_f32(b0 + k)));
+        vst1q_f32(p1, vmulq_f32(vld1q_f32(a1 + k), vld1q_f32(b1 + k)));
+        vst1q_f32(p2, vmulq_f32(vld1q_f32(a2 + k), vld1q_f32(b2 + k)));
+        vst1q_f32(p3, vmulq_f32(vld1q_f32(a3 + k), vld1q_f32(b3 + k)));
+        d0 += p0[0]; d1 += p1[0]; d2 += p2[0]; d3 += p3[0];
+        d0 += p0[1]; d1 += p1[1]; d2 += p2[1]; d3 += p3[1];
+        d0 += p0[2]; d1 += p1[2]; d2 += p2[2]; d3 += p3[2];
+        d0 += p0[3]; d1 += p1[3]; d2 += p2[3]; d3 += p3[3];
+    }
+    for (; k < n; k++) {
+        d0 += a0[k] * b0[k]; d1 += a1[k] * b1[k];
+        d2 += a2[k] * b2[k]; d3 += a3[k] * b3[k];
+    }
+    out[0] = d0; out[1] = d1; out[2] = d2; out[3] = d3;
+}
+#endif
+
 typedef struct {
     const float *w, *x;     /* x: [M,K] (bf16_linear: pre-rounded) */
     float *out;
@@ -504,6 +539,38 @@ static void apus_f32_linear_rows_avx2(const ApusF32LinearJob *j,
 }
 #endif
 
+#ifdef __ARM_NEON
+/* M14: NEON row body for both linear variants — the ARM twin of
+ * apus_f32_linear_rows_avx2 above: four rows per apus_dot4_f32_neon group
+ * (bitwise identical to apus_dot_f32_scalar per row), trailing rows scalar.
+ * round_out selects the BF16 output round, matching the two workers. */
+static void apus_f32_linear_rows_neon(const ApusF32LinearJob *j,
+                                      size_t r0, size_t r1) {
+    size_t r = r0;
+    for (; r + 4 <= r1; r += 4) {
+        const float *a[4], *b[4];
+        for (int q = 0; q < 4; q++) {
+            size_t m = (r + (size_t)q) / (size_t)j->O;
+            size_t o = (r + (size_t)q) % (size_t)j->O;
+            a[q] = j->x + m * (size_t)j->K;
+            b[q] = j->w + o * (size_t)j->K;
+        }
+        float d[4];
+        apus_dot4_f32_neon(a, b, (size_t)j->K, d);
+        for (int q = 0; q < 4; q++)
+            j->out[r + (size_t)q] = j->round_out ? apus_bf16_round(d[q])
+                                                 : d[q];
+    }
+    for (; r < r1; r++) {
+        size_t m = r / (size_t)j->O, o = r % (size_t)j->O;
+        float acc = apus_dot_f32_scalar(j->x + m * (size_t)j->K,
+                                        j->w + o * (size_t)j->K,
+                                        (size_t)j->K);
+        j->out[r] = j->round_out ? apus_bf16_round(acc) : acc;
+    }
+}
+#endif
+
 /* Scalar-order row worker (bitwise identical to the pre-M6c scalar
  * apus_f32_linear — see apus_dot_f32_scalar note). */
 static void apus_f32_linear_rows_scalar(void *vjob, size_t r0, size_t r1) {
@@ -515,6 +582,11 @@ static void apus_f32_linear_rows_scalar(void *vjob, size_t r0, size_t r1) {
         apus_f32_linear_rows_avx2(j, r0, r1);
         return;
     }
+#endif
+#ifdef __ARM_NEON
+    /* M14: bitwise-identical NEON rows (same contract as the x86 branch). */
+    apus_f32_linear_rows_neon(j, r0, r1);
+    return;
 #endif
     for (size_t r = r0; r < r1; r++) {
         size_t m = r / (size_t)j->O, o = r % (size_t)j->O;
@@ -533,6 +605,10 @@ static void apus_f32_linear_rows_bf16(void *vjob, size_t r0, size_t r1) {
         apus_f32_linear_rows_avx2(j, r0, r1);
         return;
     }
+#endif
+#ifdef __ARM_NEON
+    apus_f32_linear_rows_neon(j, r0, r1);
+    return;
 #endif
     for (size_t r = r0; r < r1; r++) {
         size_t m = r / (size_t)j->O, o = r % (size_t)j->O;
@@ -1111,7 +1187,9 @@ typedef struct {
  * pre-M6c rounding sequence (q*k dot: mul + sequential adds; P*V: one
  * FMA per element over sequential j — NEON across the independent i
  * lanes only), so per-head values are bitwise identical to the old
- * scalar code. */
+ * scalar code. M14: the q*k dots run four-at-a-time through
+ * apus_dot4_f32_neon / apus_dot4_f32_x86 — staged exact products, per-dot
+ * sequential adds — still bitwise identical to the scalar dot. */
 static void apus_sparse_attn_head(void *vjob, size_t r0, size_t r1) {
     const ApusSparseJob *j = vjob;
     int h = j->h, d = j->d, idxw = j->idxw;
@@ -1154,6 +1232,27 @@ static void apus_sparse_attn_head(void *vjob, size_t r0, size_t r1) {
                     sc[jj + q] = d4[q] * j->scale;
                     if (sc[jj + q] > mx) mx = sc[jj + q];
                 }
+            }
+        }
+#endif
+#ifdef __ARM_NEON
+        /* M14: four q.k dots per apus_dot4_f32_neon group — bitwise
+         * identical to apus_dot_f32_scalar per dot (same contract as the
+         * M12a-2 x86 branch above); sc/mx updates stay in jj order. */
+        for (; jj + 4 <= n; jj += 4) {
+            const float *a[4], *b[4];
+            for (int q = 0; q < 4; q++) {
+                int32_t id = ids[jj + q];
+                a[q] = qv;
+                b[q] = id < j->na
+                    ? j->kv_a + (size_t)id * d
+                    : j->kv_b + (size_t)(id - j->na) * d;
+            }
+            float d4[4];
+            apus_dot4_f32_neon(a, b, (size_t)d, d4);
+            for (int q = 0; q < 4; q++) {
+                sc[jj + q] = d4[q] * j->scale;
+                if (sc[jj + q] > mx) mx = sc[jj + q];
             }
         }
 #endif

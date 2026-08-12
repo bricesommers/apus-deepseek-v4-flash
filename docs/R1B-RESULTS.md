@@ -67,7 +67,7 @@ model. The project has no open verification gaps.
 ## Reproduce / re-run
 
 ```bash
-export OPENROUTER_API_KEY="<your OpenRouter API key>"
+export OPENROUTER_API_KEY="sk-or-..."
 .venv/bin/python tools/r1b/compare_api.py --list-models   # pick the 0731 id
 .venv/bin/python tools/r1b/compare_api.py --model deepseek/deepseek-v4-flash-0731
 ```

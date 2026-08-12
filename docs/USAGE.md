@@ -70,3 +70,11 @@ curl http://localhost:8080/v1/chat/completions -H 'Content-Type: application/jso
 | `APUS_METAL=1` | off | GPU dense offload (needs `bin/apus_metal`) |
 
 If numbers look off, compare with the baselines in `docs/STATUS.md`.
+
+## Note: weights on an external drive
+
+The 156 GiB container (`weights/apus-0731/`) may live on an external
+drive to save internal disk space. If so, keep a symlink at
+`weights/apus-0731` pointing to it (`ln -s /Volumes/<DRIVE>/apus-0731
+weights/apus-0731`) — every command then works unchanged. Use a fast
+drive: the engine reads 2–3 GB of experts per generated token from it.

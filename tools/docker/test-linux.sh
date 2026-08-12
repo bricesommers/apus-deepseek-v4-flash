@@ -28,7 +28,7 @@ IMAGE="${APUS_LINUX_IMAGE:-apus-linux-dev:m12a1}"
 if [ $# -eq 0 ]; then
     set -- test-m2 test-m3 test-m4a test-m4c test-m5 test-m6a test-m6b \
            test-m6c test-m7a test-m8 test-m9a test-m9b test-m9c test-m9d \
-           test-m9e test-m11b check-m11a test-m1 test-m12a2
+           test-m9e test-m11b check-m11a test-m1 test-m12a2 test-m14
     # m7b (Metal) is macOS-only BY DESIGN — excluded.
 fi
 

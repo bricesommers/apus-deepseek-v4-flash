@@ -1,6 +1,11 @@
+The files in this directory tree (reference-0731/) are DeepSeek-AI's reference
+materials for the DeepSeek-V4-Flash model — the chat-encoding reference
+implementation, conformance pairs, inference reference code, tokenizer, and
+model configs — distributed by DeepSeek-AI under the MIT License:
+
 MIT License
 
-Copyright (c) 2023 DeepSeek
+Copyright (c) DeepSeek-AI
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

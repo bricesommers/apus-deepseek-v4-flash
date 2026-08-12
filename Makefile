@@ -99,7 +99,8 @@ M8_DEPS := $(M5_DEPS) c/mtp.h
         test-m9c ubsan-m9c \
         test-m9d ubsan-m9d bench-m9d \
         test-m9e ubsan-m9e bench-m9e \
-        test-m12a2 ubsan-m12a2 bench-m12a2
+        test-m12a2 ubsan-m12a2 bench-m12a2 \
+        test-m14 ubsan-m14 bench-m14
 
 all: $(BIN)/test_tok $(BIN)/test_encoding $(BIN3)/test_fp4 $(BIN3)/bench_fp4 \
      $(BIN4)/test_fp8 $(BIN4)/test_mhc
@@ -770,6 +771,50 @@ ubsan-m12a2: $(BIN12)/test_m12a2_ubsan
 
 bench-m12a2: $(BIN12)/bench_m12a2
 	./$(BIN12)/bench_m12a2
+
+# --- M14: ARM NEON staged-product interleaved dots (c/attn.h) --------------
+# The NEON twin of the M12a-2 x86 pattern: apus_dot4_f32_neon stages exact
+# products vector-wide and keeps four independent SEQUENTIAL-add chains —
+# bitwise identical to apus_dot_f32_scalar per dot. Gates: dot4 vs scalar
+# bitwise (length sweep + adversarial values), sparse_attn and the pinned
+# f32/bf16 linear rows vs the pre-M14 reference bodies bitwise, and the
+# thread-count-independence digest (diffed across APUS_THREADS=1/4/8).
+
+M14   := tests/m14
+BIN14 := $(M14)/bin
+M14_DEPS := c/attn.h c/pool.h c/fp4.h c/fp8.h c/st.h c/x86.h c/blas.h \
+            c/backend_metal.h c/mhc.h c/json.h
+
+$(BIN14):
+	mkdir -p $(BIN14)
+
+$(BIN14)/test_m14: $(M14)/test_m14.c $(M14_DEPS) | $(BIN14)
+	$(CC) $(CFLAGS) -Ic -o $@ $< $(LDLIBS) -lpthread
+
+$(BIN14)/test_m14_ubsan: $(M14)/test_m14.c $(M14_DEPS) | $(BIN14)
+	$(CC) -std=c11 -O1 -g -Wall -Wextra -fsanitize=undefined -fno-omit-frame-pointer -ffp-contract=off $(if $(filter-out Darwin,$(UNAME)),-D_GNU_SOURCE) -Ic -o $@ $< $(LDLIBS) -lpthread
+
+$(BIN14)/bench_m14: $(M14)/bench_m14.c $(M14_DEPS) | $(BIN14)
+	$(CC) $(CFLAGS) -Ic -o $@ $< $(LDLIBS) -lpthread
+
+test-m14: $(BIN14)/test_m14
+	APUS_THREADS=1 ./$(BIN14)/test_m14 > $(BIN14)/out_t1.txt
+	APUS_THREADS=4 ./$(BIN14)/test_m14 > $(BIN14)/out_t4.txt
+	APUS_THREADS=8 ./$(BIN14)/test_m14 > $(BIN14)/out_t8.txt
+	diff $(BIN14)/out_t1.txt $(BIN14)/out_t4.txt
+	diff $(BIN14)/out_t1.txt $(BIN14)/out_t8.txt
+	cat $(BIN14)/out_t4.txt
+
+# UBSan-only, like the other milestones (-ffp-contract=off pinned: the
+# sanitizer flags override CFLAGS, dropping the Linux default flags)
+ubsan-m14: $(BIN14)/test_m14_ubsan
+	APUS_THREADS=1 ./$(BIN14)/test_m14_ubsan > $(BIN14)/out_u1.txt
+	APUS_THREADS=4 ./$(BIN14)/test_m14_ubsan > $(BIN14)/out_u4.txt
+	diff $(BIN14)/out_u1.txt $(BIN14)/out_u4.txt
+	cat $(BIN14)/out_u4.txt
+
+bench-m14: $(BIN14)/bench_m14
+	./$(BIN14)/bench_m14
 
 clean:
 	rm -rf $(BIN) $(M2)/golden $(BIN3) $(M3)/golden $(BIN4) $(M4A)/golden $(BIN4C) $(BIN5) $(BIN6) $(M6A)/tmp $(BIN6B) $(M6B)/tmp $(M7A)/fixtures $(BIN7B) $(BIN9A) $(BIN9B) $(BIN11B) bin
