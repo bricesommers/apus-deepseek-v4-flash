@@ -124,7 +124,8 @@ jobs:
 
       - name: Install MinGW toolchain
         shell: msys2 {0}
-        run: pacman -Sy --noconfirm --needed mingw-w64-ucrt64-gcc make
+        # 2026 MSYS2 naming: arch-qualified (ucrt-x86_64, not ucrt64).
+        run: pacman -Sy --noconfirm --needed mingw-w64-ucrt-x86_64-gcc make
 
       # Native Windows Python: pip wheels install cleanly (the MSYS2/mingw
       # Python reports a platform tag wheels don't match). Used for the
