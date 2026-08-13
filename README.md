@@ -1,7 +1,9 @@
 # apus
 
+[![CI](https://github.com/bricesommers/apus-deepseek-v4-flash/actions/workflows/ci.yml/badge.svg)](https://github.com/bricesommers/apus-deepseek-v4-flash/actions/workflows/ci.yml)
+
 Local inference engine for **DeepSeek-V4-Flash** (284B-total / 13B-active
-MoE, FP4 experts + FP8 dense) on consumer Apple Silicon. apus runs the full
+MoE, FP4 experts + FP8 dense) on consumer hardware. apus runs the full
 model — ~160 GB of weights, 1M-token context — on a Mac with 32 GB of
 unified memory by streaming routed experts from NVMe through a bounded RAM
 cache, instead of holding the model in memory.
