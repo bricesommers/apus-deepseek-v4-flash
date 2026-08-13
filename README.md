@@ -63,13 +63,14 @@ first, throughput second.
 
 You need: a Mac with Apple Silicon (M1 or later), a Linux PC, **or** a
 Windows PC — and about **180 GB of free disk space** for the model.
-Windows users: install [MSYS2](https://www.msys2.org/), open the
-**UCRT64** shell, run `pacman -S mingw-w64-ucrt-x86_64-gcc make`, and
-follow the Linux steps below from that shell (WSL2 works too).
+Windows users: install [MSYS2](https://www.msys2.org/) first, then use
+the **Windows** command blocks below (WSL2 works too — that follows the
+Linux path).
 
 Every grey box below is a command to paste into your terminal (on Mac:
-open **Terminal** from Applications → Utilities). Paste one box at a time,
-press Enter, wait for it to finish.
+open **Terminal** from Applications → Utilities; on Windows: open
+**MSYS2 UCRT64** from the Start menu). Paste one box at a time, press
+Enter, wait for it to finish.
 
 ### Step 1 — get the code onto your computer
 
@@ -108,9 +109,27 @@ python3 -m venv .venv
 .venv/bin/pip install numpy tokenizers huggingface_hub safetensors
 ```
 
+On **Windows** (native): first get Python — open **PowerShell** and run
+`winget install -e --id Python.Python.3.12` (or install it from
+python.org and tick **"Add python.exe to PATH"**). Then in the **MSYS2
+UCRT64** shell (Start menu → "MSYS2 UCRT64"):
+
+```sh
+pacman -S --needed mingw-w64-ucrt-x86_64-gcc make
+python -m venv .venv
+.venv/Scripts/pip install numpy tokenizers huggingface_hub safetensors
+```
+
 This creates a small private Python environment called `.venv` inside the
 folder — nothing is installed system-wide, and deleting the folder removes
 everything.
+
+> **Windows note:** a Windows venv puts its programs in `.venv/Scripts/`
+> instead of `.venv/bin/`. In every command below that starts with
+> `.venv/bin/`, use `.venv/Scripts/` instead (e.g.
+> `.venv/Scripts/python tools/download.py ...`). Everything else —
+> `make apus`, `./bin/apus run ...` — works as written in the UCRT64
+> shell (it produces `bin/apus.exe` and runs it either way).
 
 ### Step 3 — download the model (the long part: ~160 GB)
 

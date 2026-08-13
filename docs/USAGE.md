@@ -1,11 +1,16 @@
 # apus — terminal usage
 
-DeepSeek-V4-Flash, fully local on this Mac. Nothing leaves the machine.
+DeepSeek-V4-Flash, fully local on your machine. Nothing leaves it.
+
+Commands below assume a checkout built per the README (macOS, Linux, or
+Windows/MSYS2-UCRT64). On Windows the Python venv lives at
+`.venv/Scripts/` — use `.venv/Scripts/python` wherever the commands say
+`.venv/bin/python`.
 
 ## Interactive chat (like colibri's `coli chat`)
 
 ```bash
-cd ~/Desktop/AI-PROJECTS/Apus
+cd apus-deepseek-v4-flash
 .venv/bin/python tools/chat.py --model weights/apus-0731 --tiered
 ```
 
@@ -25,7 +30,7 @@ In-chat commands:
 ## One-shot generation
 
 ```bash
-cd ~/Desktop/AI-PROJECTS/Apus
+cd apus-deepseek-v4-flash
 ./bin/apus run --model weights/apus-0731 --tiered \
     --prompt "Your prompt here" --max-tokens 100 --temp 0
 ```
@@ -36,7 +41,7 @@ to try MTP speculative decoding (off by default; not always faster).
 ## OpenAI-compatible server (for other apps)
 
 ```bash
-cd ~/Desktop/AI-PROJECTS/Apus
+cd apus-deepseek-v4-flash
 .venv/bin/python tools/server.py --model weights/apus-0731 --tiered --port 8080
 ```
 
